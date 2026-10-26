@@ -416,3 +416,69 @@ it('briefs each session, waits for the brief before the first line, and lets onl
   const seen = f.requests.at(-1)!.filter((m) => m.startsWith('<voice_context>'))
   expect(seen).toEqual([(second.data as { text: string }).text])
 })
+
+it('drives Voice from a phone without a key: heard once per id, summary kept on the line', async () => {
+  const home = await temp('ultimate-voice-phone-')
+  const projectRoot = join(home, 'project')
+  await mkdir(join(projectRoot, '.ultimate/extensions/phone'), { recursive: true })
+  await writeFile(
+    join(projectRoot, '.ultimate/settings.json'),
+    JSON.stringify({ summaryModel: 'unavailable/test', extensions: { enable: ['voice-live'] } }),
+  )
+  await writeFile(
+    join(projectRoot, '.ultimate/extensions/phone/server.ts'),
+    `import { VoiceLiveApi } from ${JSON.stringify(join(ultimateRoot, 'extensions/voice-live/api.ts'))}
+export const actions = {
+  open: (args, { host }) => host.need(VoiceLiveApi).open(args.session),
+  heard: (args, { host }) => host.need(VoiceLiveApi).heard(args.text, args.id),
+  conversation: (_args, { host }) => host.need(VoiceLiveApi).conversation(),
+}
+export default { name: 'phone' }
+`,
+  )
+  const server = await fauxServer({ ultimateRoot, projectRoot, home, userHome: home })
+  servers.push(server)
+  const phone = async (name: string, args: unknown) => {
+    const result = await post(server, `/api/extensions/phone/actions/${name}`, { args })
+    expect([result.status, result.data.error]).toEqual([200, undefined])
+    return result.data.result
+  }
+  expect(await phone('conversation', null)).toBeUndefined()
+  const voice = (await phone('open', { session: 'p1' })) as ConversationId
+  expect(await phone('conversation', null)).toBe(voice)
+  expect(await phone('open', { session: 'p1' })).toBe(voice)
+  server.host.faux!.setResponses([
+    () =>
+      fauxAssistantMessage(
+        [
+          fauxToolCall('voice_say', {
+            text: 'Hello there, good to hear you.',
+            summary: 'Greeted.',
+          }),
+        ],
+        { stopReason: 'toolUse' },
+      ),
+  ])
+  await phone('heard', { text: ' hello ', id: 'h1' })
+  await phone('heard', { text: ' hello ', id: 'h1' })
+  const conversation = (await server.harness.conversation(voice, context))!
+  await until(async () => (await conversation.agent(context)) !== undefined)
+  await conversation.waitForIdle(context)
+  const entries = (
+    await server.harness.commit(
+      (tx) => tx.scanEntries({ conversationId: voice, order: 'ascending' }, 1000),
+      context,
+    )
+  ).items
+  expect(entries.filter((e) => e.kind === 'voice.session').map((e) => e.data)).toEqual([
+    { phase: 'started', at: expect.any(Number), via: 'phone' },
+  ])
+  const heard = entries.filter((e) => e.kind === 'voice.heard')
+  expect(heard.map((e) => e.data)).toEqual([{ text: 'hello', via: 'phone' }])
+  const brief = entries.find((e) => e.kind === 'voice.context')!
+  expect(brief.id).toBeLessThan(heard[0].id)
+  expect(JSON.stringify(heard[0].model)).toContain('on their phone')
+  expect(entries.filter((e) => e.kind === 'voice.line').map((e) => e.data)).toEqual([
+    { role: 'ultimate', text: 'Hello there, good to hear you.', speech: true, summary: 'Greeted.' },
+  ])
+})

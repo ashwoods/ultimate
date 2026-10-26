@@ -20,7 +20,9 @@ import { Standing, SubagentsApi } from '../subagents/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { LineageApi } from '../lineage/api.ts'
 import { EndAction, HeardAction, LogAction, StartAction, StatusAction } from './refs.ts'
-import type { VoiceAnswer, VoiceContext, VoiceLine, VoiceSession } from './refs.ts'
+import type { VoiceAnswer, VoiceContext, VoiceHeard, VoiceLine, VoiceSession } from './refs.ts'
+import { VoiceLiveApi } from './api.ts'
+import type { VoiceLiveService } from './api.ts'
 import { voiceBrief } from './brief.ts'
 
 const SECRET = 'OPENAI_API_KEY'
@@ -139,6 +141,42 @@ async function placeBrief(
     },
     context,
   )
+}
+
+/** Put together in code, without a model; a failure becomes a brief that says so, never a failed session. */
+function makeBrief(host: ExtensionHost, main: ConversationId | undefined) {
+  const started = performance.now()
+  return (
+    main ? voiceBrief(host, main, context) : Promise.reject(new Error('@ultimate is not available'))
+  ).then(
+    (made) => ({ ...made, ms: Math.round(performance.now() - started) }),
+    (error: unknown): VoiceContext => ({
+      text: '',
+      memories: 0,
+      requests: 0,
+      branches: 0,
+      tokens: 0,
+      at: Date.now(),
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  )
+}
+
+/** Place `brief` in Voice's transcript once it is ready; a heard line waits for it. */
+function placeBriefLater(
+  host: ExtensionHost,
+  id: ConversationId,
+  session: string,
+  brief: Promise<VoiceContext>,
+) {
+  const briefs = pending(host)
+  const placing = brief
+    .then((made) => placeBrief(host, id, session, made))
+    .catch((error: unknown) => console.error('Voice brief:', error))
+    .finally(() => {
+      if (briefs.get(id) === placing) briefs.delete(id)
+    })
+  briefs.set(id, placing)
 }
 
 /** Display-only writes need no model message and never launch a turn. */
@@ -399,6 +437,50 @@ export function answerTask(host: ExtensionHost) {
   })
 }
 
+/** A finished line goes in after the session's brief, so Voice reads it with the context. */
+async function hear(host: ExtensionHost, data: VoiceHeard, intro: string, requestId?: string) {
+  const id = await voiceId(host)
+  await pending(host).get(id)
+  const conversation = (await host.harness().conversation(id, context))!
+  await conversation.submit(
+    {
+      type: 'input',
+      ...(requestId ? { requestId } : {}),
+      whenBusy: 'steer',
+      entry: { kind: 'voice.heard', data },
+      content: `${intro}\n${data.text}`,
+    },
+    context,
+  )
+}
+
+const PHONE_INTRO =
+  'The user, on their phone (push-to-talk, on-device transcript, may contain mistakes). No live voice model is on this call: you are the only voice, so speak with voice_say:'
+
+/** What other extensions use to drive Voice from a phone: no OpenAI key, no GPT-Live. */
+export const phone = (host: ExtensionHost): VoiceLiveService => ({
+  async open(session) {
+    const id = await host.need(SubagentsApi).standing('voice', context)
+    await write(
+      host,
+      id,
+      'voice.session',
+      { phase: 'started', at: Date.now(), via: 'phone' },
+      `voice:start:phone:${session}`,
+    )
+    const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
+    placeBriefLater(host, id, session, makeBrief(host, main))
+    return id
+  },
+  heard: (text, id) => {
+    if (!text.trim()) throw new Error('Expected text')
+    return hear(host, { text: text.trim(), via: 'phone' }, PHONE_INTRO, `voice:heard:${id}`)
+  },
+  async conversation() {
+    return (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.voice
+  },
+})
+
 export const actions = {
   status: implementAction(StatusAction, async (_args, { host, signal }) =>
     (await apiKey(host, signal))
@@ -413,23 +495,7 @@ export const actions = {
     const id = await host.need(SubagentsApi).standing('voice', context)
     // Put together while the session connects; a failure becomes a brief that says so, never a failed start.
     const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
-    const started = performance.now()
-    const brief = (
-      main
-        ? voiceBrief(host, main, context)
-        : Promise.reject(new Error('@ultimate is not available'))
-    ).then(
-      (made) => ({ ...made, ms: Math.round(performance.now() - started) }),
-      (error: unknown): VoiceContext => ({
-        text: '',
-        memories: 0,
-        requests: 0,
-        branches: 0,
-        tokens: 0,
-        at: Date.now(),
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    )
+    const brief = makeBrief(host, main)
     const recent = await host.harness().commit((tx) => lines(tx, id, 10), context)
     // Bound both messages and input size, leaving room below the 8,192-token session seed cap.
     const input = recent
@@ -476,31 +542,16 @@ export const actions = {
       { phase: 'started', at: Date.now() },
       `voice:start:${answer.session.id}`,
     )
-    const briefs = pending(host)
-    const placing = brief
-      .then((made) => placeBrief(host, id, answer.session!.id!, made))
-      .catch((error: unknown) => console.error('Voice brief:', error))
-      .finally(() => {
-        if (briefs.get(id) === placing) briefs.delete(id)
-      })
-    briefs.set(id, placing)
+    placeBriefLater(host, id, answer.session.id, brief)
     return { sdp: answer.transport.sdp, conversation: id }
   }),
   heard: implementAction(HeardAction, async (args, { host }) => {
     const text = args && typeof args === 'object' && !Array.isArray(args) ? args.text : undefined
     if (typeof text !== 'string' || !text.trim()) throw new Error('Expected text')
-    const id = await voiceId(host)
-    // The first line of a session goes in after its brief, so Voice reads it with the context.
-    await pending(host).get(id)
-    const conversation = (await host.harness().conversation(id, context))!
-    await conversation.submit(
-      {
-        type: 'input',
-        whenBusy: 'steer',
-        entry: { kind: 'voice.heard', data: { text: text.trim() } },
-        content: `The user, by voice (live transcript, may contain mistakes):\n${text.trim()}`,
-      },
-      context,
+    await hear(
+      host,
+      { text: text.trim() },
+      'The user, by voice (live transcript, may contain mistakes):',
     )
     return {}
   }),
@@ -545,6 +596,7 @@ export default (host: ExtensionHost) => {
   host.need(SubagentsApi)
   host.need(LineageApi)
   host.need(ConversationsApi)
+  host.implement(VoiceLiveApi, phone(host))
   return defineExtension({
     name: 'voice-live',
     tasks: [answerTask(host)],
@@ -582,11 +634,14 @@ export default (host: ExtensionHost) => {
         name: 'voice_say',
         deferred: true,
         description:
-          'Speak text to the user through GPT-Live. Use for your answer, clarification or brief acknowledgement.',
-        parameters: Type.Object({ text: Type.String({ minLength: 1 }) }),
+          'Speak text to the user: through GPT-Live in the browser, or as the only voice on a phone line. Use for your answer, clarification or brief acknowledgement. `summary`: one plain line for a lock-screen notification.',
+        parameters: Type.Object({
+          text: Type.String({ minLength: 1 }),
+          summary: Type.Optional(Type.String({ minLength: 1, maxLength: 140 })),
+        }),
         // The tool task's request id writes the spoken line once; correlation is memoized.
         replay: 'safe',
-        async execute({ text }, api, ctx) {
+        async execute({ text, summary }, api, ctx) {
           if (api.conversationId !== (await voiceId(host))) throw new Error('Only Voice speaks')
           // Locate the input this tool round saw, not a later queued/steering input. No model-supplied correlation id.
           const task = await api.getTask(api.taskId, ctx)
@@ -625,6 +680,7 @@ export default (host: ExtensionHost) => {
               role: 'ultimate',
               text,
               speech: true,
+              ...(summary ? { summary } : {}),
               ...(typeof re === 'number' ? { re } : {}),
             },
             `voice:say:${api.taskId}`,

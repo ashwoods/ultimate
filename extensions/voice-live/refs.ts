@@ -6,6 +6,8 @@ export type VoiceSession = {
   phase: 'started' | 'ended'
   at: number
   seconds?: number
+  /** `phone`: opened through the voice-live API, with no GPT-Live. */
+  via?: 'phone'
 }
 /**
  * One line of the Voice transcript. `user`: the cleaned request forwarded to @ultimate;
@@ -20,7 +22,11 @@ export type VoiceLine = {
   re?: number
   source?: { conversation: number; entry: number }
   speech?: true
+  /** One plain line for a lock-screen notification, set when Voice speaks @ultimate's answer. */
+  summary?: string
 }
+/** A finished user line; `via`: `phone` when it came from the push-to-talk phone line. */
+export type VoiceHeard = { text: string; via?: 'phone' }
 export type VoiceUtterance = { text: string; line: number }
 /**
  * What Voice was given at a session's start: the project memory, the user's recent requests to @ultimate and the open

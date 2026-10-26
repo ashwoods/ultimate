@@ -52,6 +52,22 @@ agent uses `openai-codex/gpt-6-luna` through Pi's existing ChatGPT login, low th
    `voice_say` derives `re` from the input preceding its own tool round, so speech answers the right forwarded line.
    Request ids and a transactional scheduling receipt keep forwards and answer delivery safe across task replay.
 
+## Phone sessions
+
+`api.ts` exports `VoiceLiveApi` (service `voice-live`) so another extension can drive Voice from a phone instead of
+GPT-Live, with no OpenAI key:
+
+- `open(session)` ensures the standing Voice conversation, writes `voice.session { phase: 'started', via: 'phone' }`
+  (request id `voice:start:phone:<session>`, so repeating a session id writes once), places the context brief like
+  `start` does and returns the conversation id.
+- `heard(text, id)` submits a `voice.heard` input with `via: 'phone'` (request id `voice:heard:<id>`, admitted once)
+  after the pending brief. Its model content says the user is on their phone (push-to-talk, on-device transcript,
+  may contain mistakes) and that no live voice model is on the call, so Voice is the only voice.
+- `conversation()` returns the Voice conversation id if it exists.
+
+`voice_say` takes an optional `summary` (at most 140 characters): one plain line for a lock-screen notification,
+stored on the `voice.line` data. Voice sets it whenever it speaks @ultimate's answer on a phone line.
+
 ## Browser and transcript
 
 `Standing.voice` is the only Voice conversation index. Its `Unlisted` provider removes it from other sidebar lists;
