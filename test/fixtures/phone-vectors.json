@@ -1,0 +1,76 @@
+{
+  "keys": {
+    "M": {
+      "private": "0101010101010101010101010101010101010101010101010101010101010101",
+      "public": "a4e09292b651c278b9772c569f5fa9bb13d906b46ab68c9df9dc2b4409f8a209"
+    },
+    "P": {
+      "private": "0202020202020202020202020202020202020202020202020202020202020202",
+      "public": "ce8d3ad1ccb633ec7b70c17814a5c76ecd029685050d344745ba05870e587d59"
+    },
+    "Ep": {
+      "private": "0303030303030303030303030303030303030303030303030303030303030303",
+      "public": "5dfedd3b6bd47f6fa28ee15d969d5bb0ea53774d488bdaf9df1c6e0124b3ef22"
+    },
+    "Em": {
+      "private": "0404040404040404040404040404040404040404040404040404040404040404",
+      "public": "ac01b2209e86354fb853237b5de0f4fab13c7fcbf433a61c019369617fecf10b"
+    }
+  },
+  "device": "z6VwxlO9ISsQqctVH9ehtH",
+  "instance": {
+    "machineSecret": "0505050505050505050505050505050505050505050505050505050505050505",
+    "projectRoot": "/Users/me/Code/ultimate",
+    "id": "KZ16vaB2UZ9dlUGEZDxiS-"
+  },
+  "hello": {
+    "t": "hello",
+    "v": 1,
+    "device": "zo060cy2M-x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVk",
+    "eph": "Xf7dO2vUf2-ijuFdlp1bsOpTd01Ii9r53xxuASSz7yI"
+  },
+  "welcome": {
+    "t": "welcome",
+    "eph": "rAGyIJ6GNU-4UyN7XeD0-rE8f8v0M6YcAZNpYX_s8Qs",
+    "proof": "AAAAAAAAAAByoSO2qB5n34PVxtK9lH5a"
+  },
+  "h": "e5b1d6a615b12dfbb5009cd514fe30d2bbc399dd4b1d9561017fc5643f44e572",
+  "ikm": "b0190541a2abb8bc163b6eef0fae7ba0179004b444326f73809563164d47c5212ed76ab549b1e73c031eb49c9448f0798aea81b698279a0c3dc3e49fbfc4b95340e47a3f525bdcac491d418978d7db5af623ac7afe7623c6d78a5d4fce9d0f6309bb974ce3799959096660bdece3bb89ca106e6df31c2f701b7b8b9977047c34",
+  "kPM": "d7e738e25e1f5781bcca1bc7125d1052c231122a289943d6c1c9b12e9d1de7a1",
+  "kMP": "d508e4f031a8dfb17d6ba280ce9c239f52f8f870e864161c096f3e273f506460",
+  "frames": [
+    {
+      "from": "phone",
+      "counter": 0,
+      "plaintext": "{\"id\":1,\"method\":\"ping\",\"params\":{}}",
+      "frame": "00000000000000009fdc793d009bcaba06a95cf5e10948293db2ea85be7794e17a43d1c9bc24205601a522eaa7e75b7a46683def96a968d8b797c7d0"
+    },
+    {
+      "from": "mac",
+      "counter": 1,
+      "plaintext": "{\"id\":1,\"result\":{}}",
+      "frame": "000000000000000170d8be8b70a26a5eeb5da011b88eb8b25a8b196cb222c4c2dd6124a0542bb19641c9c999"
+    }
+  ],
+  "push": {
+    "kPush": "893204076df20722da6949aae67379e69374229d59b4f17a0231978982cbd3fe",
+    "plaintext": "{\"title\":\"Ultimate\",\"body\":\"Tests pass; landed abc123.\",\"job\":42}",
+    "enc": "BgYGBgYGBgYGBgYG9SW3dx3R8uwam6Ie5rT6Qvs1xSWPUNc06NTHrOtRIrNjiOD3SR1bCx0JnWxHfS9NozQjwLP6hrNUf6e2I1vCd5rdDN6Xp7wwTF7PPpMBJque"
+  },
+  "tokenHash": {
+    "token": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+    "sha256": "ce9ec58122164c824a43e0452ffbba3da694694b44563b5c548942dbb8ab8e14"
+  },
+  "pairing": {
+    "json": {
+      "v": 1,
+      "relay": "wss://relay.example.workers.dev",
+      "machine": "BwcHBwcHBwcHBwcHBwcHBw",
+      "instance": "KZ16vaB2UZ9dlUGEZDxiS-",
+      "key": "pOCSkrZRwni5dyxWn1-puxPZBrRqtoyd-dwrRAn4ogk",
+      "token": "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg",
+      "name": "Mac"
+    },
+    "qr": "ultimate-pair:eyJ2IjoxLCJyZWxheSI6IndzczovL3JlbGF5LmV4YW1wbGUud29ya2Vycy5kZXYiLCJtYWNoaW5lIjoiQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCdyIsImluc3RhbmNlIjoiS1oxNnZhQjJVWjlkbFVHRVpEeGlTLSIsImtleSI6InBPQ1NrclpSd25pNWR5eFduMS1wdXhQWkJyUnF0b3lkLWR3clJBbjRvZ2siLCJ0b2tlbiI6IkNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnSUNBZ0lDQWciLCJuYW1lIjoiTWFjIn0"
+  }
+}
