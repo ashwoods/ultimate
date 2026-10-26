@@ -41,9 +41,20 @@ All are user-only (`userActions`).
 - `revoke { device }` removes a phone, tells the relay and closes its open connections with 4401. Other instances notice
   at the phone's next call.
 
+## UI
+
+The status line's `phone` indicator opens a popover (`web.tsx`) with the `status` action, read on load, on open and
+after a reinstall, and every second while the popover is open on a pairing. The dot is green while the relay connection
+is up, grey while connecting, amber while unconfigured or failing, and brand while a pairing code is out; off (a preview)
+it stays out of the line, and the palette's `Phone…` opens the popover in its place, saying why. Unconfigured, it shows
+what `error` names, with **Add token** opening the Secrets panel at `ULTIMATE_PHONE_RELAY_TOKEN`. Connected, it lists
+the paired phones with **Remove** (`revoke`, one click) and **Pair a phone**: a QR code with **Cancel**, **Copy code**
+and the time left. A phone that scans it shows as a request naming the phone and this Mac, with **Deny** and **Allow**;
+nothing is added without that click. After Allow the popover confirms the new phone until it closes.
+
 ## Files
 
 `crypto.ts` (handshake, frames, ids), `state.ts`, `channel.ts` (one phone's handshake, counters and RPC dispatch),
 `connector.ts` (the relay socket, reconnecting from 1 s to 30 s), `pairing.ts`, `runtime.ts` (configuration, status and
-actions), `methods.ts` (the table of RPC methods a phone can call: `pair`, `ping`, `instances`, `push.register`,
+actions), `web.tsx` (the popover), `methods.ts` (the table of RPC methods a phone can call: `pair`, `ping`, `instances`, `push.register`,
 `activity.register`, `tts.token`; add the rest there).
