@@ -51,6 +51,7 @@ import { WorkspacesApi } from '../workspaces/api.ts'
 import { ConversationsApi } from '../conversations/api.ts'
 import { Pin } from '../models/api.ts'
 import { Profile, Standing, Subagents, SubagentsApi } from './api.ts'
+import type { SubagentsService } from './api.ts'
 import {
   DefinitionAction,
   DefinitionsAction,
@@ -591,7 +592,7 @@ export default function subagents(
       return moved
     }, ctx)
     // An adopted conversation runs as its new agent from now on, under its new name, not at its next session.
-    for (const name of adopted) await host.need(SubagentsApi).standing(name, ctx)
+    for (const name of adopted) await service.standing(name, ctx)
   }
   // The definition a conversation runs as: children and standing agents record it, branches and the lander carry it
   // as a label. Its pin, read fresh, is what a conversation whose model lost its login switches to first.
@@ -608,7 +609,7 @@ export default function subagents(
       return definitions.find((definition) => definition.name === name)?.model
     },
   })
-  host.implement(SubagentsApi, {
+  const service: SubagentsService = {
     async createChild(tx, options) {
       const child = await createChild(host, tx, options)
       await started(host, tx, child, options.definition?.name ?? options.label, 'child')
@@ -660,7 +661,8 @@ export default function subagents(
         return id
       }, ctx)
     },
-  })
+  }
+  host.implement(SubagentsApi, service)
   const Reporter = createReporter()
   let unsubscribe: (() => void) | undefined
   let recovery = Promise.resolve()

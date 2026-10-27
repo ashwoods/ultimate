@@ -218,9 +218,10 @@ it('gives a standing conversation to the resident that replaces its agent with f
   expect(await service.residents(ctx)).toEqual([{ name: 'y', description: 'Renamed' }])
   await reopen()
   expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ y: id })
-  expect(await service.standing('y', ctx)).toBe(id)
+  // The prune reconfigures what it adopted at once: no session has to start first.
   expect(await host.harness.snapshot(Metadata, id, ctx)).toMatchObject({ title: '@y' })
   expect(await host.harness.snapshot(Profile, id, ctx)).toEqual({ definition: 'y' })
+  expect(await service.standing('y', ctx)).toBe(id)
   await expect(service.standing('x', ctx)).rejects.toThrow('Standing agents: @y')
 
   // `standing` alone also moves it, before any prune ran.
