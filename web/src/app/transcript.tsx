@@ -183,6 +183,13 @@ export function Transcript({ dock }: { dock?: boolean }) {
   )
 }
 
+/** A focused reveal's brief ring around what it scrolled to, fading out. */
+const revealHighlight = [
+  { boxShadow: '0 0 0 3px var(--ring)' },
+  { boxShadow: '0 0 0 3px var(--ring)', offset: 0.5 },
+  { boxShadow: '0 0 0 3px transparent' },
+]
+
 function TranscriptEntries() {
   const { id, entries: active, older, live, busy, loading } = useConversation()
   const [history, setHistory] = useState<EntryRecord[]>([])
@@ -538,11 +545,15 @@ function TranscriptEntries() {
   // Reveal a stored row without the auto-follow animation overriding the jump; a row older than those loaded needs the
   // history down to it first, and one in a folded run needs the run open.
   const [reveal, setReveal] = useState<number>()
+  // `focus`, a selector inside the row (such as one message's card), is what the reveal scrolls to and highlights.
+  const focus = useRef<string>(undefined)
   useEvent('ultimate:reveal-entry', (value) => {
-    const target = value as { conversationId?: number; entryId?: number } | undefined
-    const entryId = target?.entryId
-    if (target?.conversationId === id && entryId !== undefined && Number.isSafeInteger(entryId))
+    const target = (value ?? {}) as { conversationId?: number; entryId?: number; focus?: string }
+    const entryId = target.entryId
+    if (target.conversationId === id && entryId !== undefined && Number.isSafeInteger(entryId)) {
+      focus.current = target.focus
       setReveal(entryId)
+    }
   })
   const revealStep = useEffectEvent(() => {
     if (reveal === undefined || loading || pending) return
@@ -578,11 +589,16 @@ function TranscriptEntries() {
       open(run, true)
       return
     }
-    const element = contentRef.current?.querySelector(`[data-entry-id="${reveal}"]`)
-    if (element) {
+    const row = contentRef.current?.querySelector(`[data-entry-id="${reveal}"]`)
+    const target = (focus.current && row?.querySelector(focus.current)) || row
+    if (target) {
       stopScroll()
-      element.scrollIntoView({ block: 'start' })
+      // A focused card that fits sits mid-view, its ring clear of the header.
+      const fits = focus.current && target.clientHeight < window.innerHeight * 0.7
+      target.scrollIntoView({ block: fits ? 'center' : 'start' })
+      if (focus.current) target.animate(revealHighlight, { duration: 1600, easing: 'ease-out' })
     }
+    focus.current = undefined
     setReveal(undefined)
   })
   useLayoutEffect(

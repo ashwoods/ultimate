@@ -434,7 +434,8 @@ renderers, link renderers compose in discovery order behind error boundaries tha
 for links you leave alone. A link still streaming never reaches them. `instance` renders links to its previews as chips
 that open in the window. `MessageResponse` also turns `#id` and `#id/entry` mentions (three or more digits, outside
 code and links) into `#conversation-<id>[-<entry>]` links, and `MentionText` does the same for plain text;
-`conversations` renders those of known conversations as their feature chip, others stay text.
+`conversations` renders those of known conversations as their feature chip, others stay text. `message 74` becomes a
+`#message-74` link the same way, which `messages` renders as a link to that message's card.
 
 ```tsx
 link: ({ href, children, core }) =>
