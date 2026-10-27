@@ -593,7 +593,9 @@ function TranscriptEntries() {
     const target = (focus.current && row?.querySelector(focus.current)) || row
     if (target) {
       stopScroll()
-      target.scrollIntoView({ block: 'start' })
+      // A focused card that fits sits mid-view, its ring clear of the header.
+      const fits = focus.current && target.clientHeight < window.innerHeight * 0.7
+      target.scrollIntoView({ block: fits ? 'center' : 'start' })
       if (focus.current) target.animate(revealHighlight, { duration: 1600, easing: 'ease-out' })
     }
     focus.current = undefined
