@@ -83,15 +83,21 @@ export class Pairing {
 
   async allow(device: string) {
     const waiting = this.#waiting(device)
+    // Detached while the phone is added, so neither the code expiring nor a new code can tell it otherwise.
+    const pending = this.#pending!
+    pending.waiting = undefined
     let paired: Paired
     try {
       paired = await this.#hooks.complete(waiting)
     } catch (error) {
-      this.#end(error as Error)
+      if (this.#pending === pending) {
+        pending.waiting = waiting
+        this.#end(error as Error)
+      } else waiting.reject(error as Error)
       throw error
     }
     waiting.resolve(paired)
-    this.#end()
+    if (this.#pending === pending) this.#end()
   }
   deny(device: string) {
     this.#waiting(device)
