@@ -20,6 +20,9 @@ import type { EventData, EventToken } from '../shared/events.ts'
 import { EventFeed, eventLog } from '../server/events.ts'
 import type { Reactor } from '../server/events.ts'
 
+/** Ultimate's clone, also when an extension's own repository runs these helpers through its `ultimate` link. */
+const clone = resolve(import.meta.dirname, '..')
+
 vi.mock('@earendil-works/pi-ai/providers/faux', async (importOriginal) => {
   const original = await importOriginal<typeof import('@earendil-works/pi-ai/providers/faux')>()
   return {
@@ -115,9 +118,9 @@ export async function temp(prefix = 'ultimate-test-', parent = tmpdir()) {
 export async function linkDependencies(root: string) {
   const target = join(root, 'node_modules')
   await mkdir(target)
-  for (const name of await readdir(resolve('node_modules'))) {
+  for (const name of await readdir(resolve(clone, 'node_modules'))) {
     if (name.startsWith('.vite')) continue
-    await symlink(resolve('node_modules', name), join(target, name))
+    await symlink(resolve(clone, 'node_modules', name), join(target, name))
   }
 }
 /**
@@ -125,11 +128,11 @@ export async function linkDependencies(root: string) {
  * their contracts and helpers.
  */
 export async function copyApis(root: string) {
-  await cp(resolve('shared'), join(root, 'shared'), { recursive: true })
-  await cp(resolve('lib'), join(root, 'lib'), { recursive: true })
-  for (const name of await readdir(resolve('extensions')))
+  await cp(resolve(clone, 'shared'), join(root, 'shared'), { recursive: true })
+  await cp(resolve(clone, 'lib'), join(root, 'lib'), { recursive: true })
+  for (const name of await readdir(resolve(clone, 'extensions')))
     for (const file of ['api.ts', 'refs.ts']) {
-      const contract = resolve('extensions', name, file)
+      const contract = resolve(clone, 'extensions', name, file)
       if (!existsSync(contract)) continue
       await mkdir(join(root, 'extensions', name), { recursive: true })
       await cp(contract, join(root, 'extensions', name, file))
@@ -138,10 +141,10 @@ export async function copyApis(root: string) {
 export async function sourceCopy(parent: string) {
   await mkdir(parent, { recursive: true })
   const root = await temp('source-', parent)
-  await cp(resolve('.'), root, {
+  await cp(clone, root, {
     recursive: true,
     filter: (path) =>
-      !['.git', 'node_modules'].includes(path.slice(resolve('.').length + 1).split('/')[0]),
+      !['.git', 'node_modules'].includes(path.slice(clone.length + 1).split('/')[0]),
   })
   await linkDependencies(root)
   const config = join(root, 'vite.config.ts')
@@ -172,7 +175,7 @@ export async function branchProbe(ultimateRoot: string) {
   await writeFile(
     join(dir, 'server.ts'),
     `import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { LineageApi } from ${JSON.stringify(resolve('extensions/lineage/api.ts'))}
+import { LineageApi } from ${JSON.stringify(resolve(clone, 'extensions/lineage/api.ts'))}
 export const actions = {
   branch: (args, { host }) => host.need(LineageApi).branch(args, BACKGROUND_CONTEXT),
 }
@@ -190,11 +193,9 @@ type FixtureOptions = ServerOptions & {
 async function isolated(options: FixtureOptions) {
   const { home, userHome } = options
   const ultimateRoot =
-    options.ultimateRoot === resolve('.') ? await sourceCopy(home) : options.ultimateRoot
+    options.ultimateRoot === clone ? await sourceCopy(home) : options.ultimateRoot
   const projectRoot =
-    !options.projectRoot || options.projectRoot === resolve('.')
-      ? ultimateRoot
-      : options.projectRoot
+    !options.projectRoot || options.projectRoot === clone ? ultimateRoot : options.projectRoot
   if (options.localSetup !== false)
     new ProjectTrustStore(join(userHome, '.ultimate')).set(projectRoot, true)
   if (!options.firstRun) {

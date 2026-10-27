@@ -82,10 +82,43 @@ project is Ultimate itself, that is `.ultimate/extensions/` in the clone, not `e
 Extensions outside the clone import exactly what built-ins import (`@/sdk`, `@/components/…`, `react`,
 `lucide-react`, any package installed in the clone): Ultimate resolves those from its clone, and Tailwind picks up their
 classes. In the clone, `pnpm check` type-checks and lints `extensions/` and `.ultimate/extensions/`; extensions of
-other projects are not checked by anything, so try them in the browser. Agents live in the same three places
+other projects are not checked unless they set it up as below, so try them in the browser. Agents live in the same three places
 (`agents/`); an enabled extension may also ship an `agents/` folder. Those definitions load as built-ins before
 user/project definitions and overlays, and disappear when the extension is disabled. Skills load as [Discovery and settings](../docs/settings.md) describes, later scopes winning by name. A project's `.ultimate/settings.json` may set `defaultSurface` (see
 [Surfaces](#surfaces)).
+
+### An extension in its own repository
+
+An extension can live in a repository of its own and reach Ultimate's modules (`lib/`, other extensions' `api.ts`,
+`refs.ts` and `ui.tsx`, the test helpers) through a link to the clone:
+
+```json
+{
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "ultimate": "link:../ultimate",
+    "@earendil-works/pi-durable": "link:../ultimate/node_modules/@earendil-works/pi-durable"
+  }
+}
+```
+
+- `pnpm install` makes `node_modules/ultimate` point at the clone. Import Ultimate's own modules as
+  `ultimate/lib/settings.ts` or `ultimate/extensions/sidebar/ui.tsx`, never by relative path; `@/sdk`, `react` and the
+  clone's other packages work as in a built-in. When the running host is that clone, they load as the same modules the
+  built-ins use.
+- Link each package the server facet or the tests import by name from the clone's `node_modules`, as
+  `@earendil-works/pi-durable` above: Node, and the type-checker for a subpath such as `@earendil-works/chord/context`,
+  look for it next to the importing file.
+- Type-check with a `tsconfig.json` that extends the clone's
+  (`{ "extends": "ultimate/tsconfig.extension.json", "include": ["my-extension", "test"] }`) and run the clone's
+  `node_modules/ultimate/node_modules/.bin/tsc -p .`.
+- Test with the clone's `node_modules/ultimate/node_modules/.bin/vitest run`, a `vitest.config.ts` that sets
+  `setupFiles: ['node_modules/ultimate/test/setup.ts']` and `globalSetup: ['node_modules/ultimate/test/sweep-temp.ts']`,
+  and `fauxServer`, `sourceCopy` and `temp` from `ultimate/test/helpers.ts`.
+- Symlink the folder in as a user extension (`ln -s ~/Code/my-repo/my-extension ~/.ultimate/extensions/my-extension`)
+  and restart Ultimate once so Tailwind reads its classes. It is on in every project; settings and secrets work as for
+  any extension.
 
 ## Extension host
 
