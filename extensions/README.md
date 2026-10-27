@@ -105,9 +105,11 @@ An extension can live in a repository of its own and reach Ultimate's modules (`
 
 - `pnpm install` makes `node_modules/ultimate` point at the clone. Import Ultimate's own modules as
   `ultimate/lib/settings.ts` or `ultimate/extensions/sidebar/ui.tsx`, never by relative path; `@/sdk`, `react` and the
-  clone's other packages work as in a built-in. They load as the same modules the built-ins use.
+  clone's other packages work as in a built-in. When the running host is that clone, they load as the same modules the
+  built-ins use.
 - Link each package the server facet or the tests import by name from the clone's `node_modules`, as
-  `@earendil-works/pi-durable` above: Node and the type-checker look for it next to the importing file.
+  `@earendil-works/pi-durable` above: Node, and the type-checker for a subpath such as `@earendil-works/chord/context`,
+  look for it next to the importing file.
 - Type-check with a `tsconfig.json` that extends the clone's
   (`{ "extends": "ultimate/tsconfig.extension.json", "include": ["my-extension", "test"] }`) and run the clone's
   `node_modules/ultimate/node_modules/.bin/tsc -p .`.
