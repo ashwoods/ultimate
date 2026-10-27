@@ -10,7 +10,7 @@ import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { Checkbox } from '@/components/ui/checkbox'
 import { api, cn, errorMessage, events, formatAgo, useDocOf, useNow, useUltimate } from '@/sdk'
-import { Address, MessagesDoc, emptyMessages, useAccentOf } from '../messages/ui.tsx'
+import { Address, MessageNumber, MessagesDoc, emptyMessages, useAccentOf } from '../messages/ui.tsx'
 import type { Question } from '../messages/refs.ts'
 import { waiting } from '../questions/ui.tsx'
 import { StandingAction } from '../subagents/ui.tsx'
@@ -262,6 +262,7 @@ function QuestionRow({ message, now }: { message: Asked; now: number }) {
             <span className={cn('flex min-w-0 font-semibold', accent.name)}>
               <Address id={message.from} remote={message.remote} />
             </span>
+            <MessageNumber id={message.id} />
             {from !== undefined && (
               <span className="flex shrink-0 items-center gap-0.5 text-muted-foreground/70 transition-colors group-hover/question:text-foreground">
                 answer
