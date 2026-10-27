@@ -214,6 +214,7 @@ export function Bubble({
         <span className={cn('flex min-w-0 font-semibold', accent.name)}>
           <Address id={from} mark />
         </span>
+        {message && <MessageNumber id={message.id} />}
         {entry ? (
           <MessageActions
             bubble
@@ -353,6 +354,15 @@ export function BackgroundSummary({ rows, steps, working }: CompactSummaryProps)
   )
 }
 
+/** A message's board number, as agents name it in text ("message 74"). */
+export function MessageNumber({ id }: { id: number }) {
+  return (
+    <span className="shrink-0 text-muted-foreground/70" data-message-number={id}>
+      msg {id}
+    </span>
+  )
+}
+
 /**
  * The `message` tool as the message it sent; a failed call keeps the generic card with its error. In compact mode, a message
  * to you is a bubble.
@@ -432,6 +442,7 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
             {message?.images && ` · ${imageCount(message.images.count)}`}
           </span>
           {state && <span className={state === 'failed' ? 'text-destructive' : ''}>· {state}</span>}
+          {message && <MessageNumber id={message.id} />}
           {message && typeof message.to === 'number' && message.entry !== undefined && (
             <button
               className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"
@@ -667,6 +678,7 @@ export function MessageInput({ entry }: { entry: EntryRecord }) {
           )}
           <TriageStatus id={origin.id} />
           <TriageReason id={origin.id} />
+          <MessageNumber id={origin.id} />
           {typeof origin.from === 'number' && (
             <button
               className="ml-auto flex cursor-pointer items-center gap-1 hover:text-foreground"

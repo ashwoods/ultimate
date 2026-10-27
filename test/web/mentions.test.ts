@@ -17,6 +17,7 @@ vi.mock('@/sdk', () => ({
   useUltimate: () => ({ switchConversation: () => {}, showSurface: () => {} }),
 }))
 const { MentionLink } = await import('../../extensions/conversations/mention.tsx')
+const { messageTarget } = await import('../../extensions/messages/link.tsx')
 
 const mentions = (text: string) =>
   splitMentions(text).flatMap((part) => (typeof part === 'string' ? [] : [part.text]))
@@ -27,6 +28,29 @@ it('finds conversation mentions and breadcrumbs in running text', () => {
     '#157833/158003',
     '#30726',
   ])
+})
+
+it('finds board messages by id as message links', () => {
+  expect(splitMentions('Message 74 is still open, as is message 75.')).toEqual([
+    { href: '#message-74', text: 'Message 74' },
+    ' is still open, as is ',
+    { href: '#message-75', text: 'message 75' },
+    '.',
+  ])
+  expect(mentions('a message, messages 74, mymessage 74, message 74x, message 7/8')).toEqual([])
+})
+
+it('resolves a message id to the conversation and call that sent it', () => {
+  const message = { id: 74, at: 0, text: 'Pick one', state: 'delivered', reply: true } as const
+  const log = [
+    { ...message, from: 41, to: 'user', call: 'toolu_1' },
+    { ...message, id: 75, from: 'user', to: 41 },
+    { ...message, id: 76, from: 41, to: 7569 },
+  ] as const
+  expect(messageTarget(log, 74)).toEqual({ conversation: 41, call: 'toolu_1', open: true })
+  expect(messageTarget(log, 75)).toBeUndefined()
+  expect(messageTarget(log, 76)).toBeUndefined()
+  expect(messageTarget(log, 99)).toBeUndefined()
 })
 
 it('leaves short numbers, words, paths, URLs and entities alone', () => {

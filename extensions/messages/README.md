@@ -268,3 +268,8 @@ The script shows as soon as the log holds a message it sent, while it runs or af
 before the log recorded calls, or that the bounded log dropped, leave it folded. Once the bounded log has dropped a
 direct message, its bubble shows no state. An answer that went back to the branches that asked folds to “replied to
 #id”.
+
+`message 74` in rendered Markdown and `MentionText` is a link (`link.tsx`) when the log knows that message and the
+call that sent it: a click emits `messages:open { conversation, call, message }`, which opens the sender's
+conversation, scrolls to that message's card and briefly rings it (the transcript's `ultimate:reveal-entry` with a
+`focus` selector). Unknown ids stay text.
