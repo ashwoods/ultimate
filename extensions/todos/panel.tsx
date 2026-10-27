@@ -236,7 +236,8 @@ function QuestionRow({ message, now }: { message: Asked; now: number }) {
   const from = typeof message.from === 'number' ? message.from : undefined
   const open = () => {
     if (from === undefined) return
-    if (message.call) events.emit('messages:open', { conversation: from, call: message.call })
+    if (message.call)
+      events.emit('messages:open', { conversation: from, call: message.call, message: message.id })
     showSurface('agent')
     switchConversation(from)
   }

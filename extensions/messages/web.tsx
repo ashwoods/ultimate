@@ -27,6 +27,7 @@ import {
   ultimateCompact,
 } from './data.tsx'
 import { callerOf } from './caller.ts'
+import { MessageLink } from './link.tsx'
 import { StandingDoc } from '../subagents/ui.tsx'
 import { MessagesDoc, CallerAction } from './refs.ts'
 import type { MessagesData } from './refs.ts'
@@ -50,18 +51,25 @@ function MessageAnswerLabel({ entry }: { entry: EntryRecord }) {
 /**
  * Stay mounted across surfaces so an Open click can reveal after Agent mounts and loads. `messages:open` names the entry,
  * or the tool call that sent a message (`call`): the response that made it, found in the loaded entries or else in the
- * stored history, which the transcript then pages in.
+ * stored history, which the transcript then pages in. With `message`, the reveal lands on that message's card and
+ * highlights it.
  */
 function MessageNavigation() {
   const { id, entries, loading } = useConversation()
   const { surface } = useUltimate()
-  const [target, setTarget] = useState<{ conversation: number; entry?: number; call?: string }>()
+  const [target, setTarget] = useState<{
+    conversation: number
+    entry?: number
+    call?: string
+    message?: number
+  }>()
   useEvent('messages:open', (value) => setTarget(value as NonNullable<typeof target>))
   useEffect(() => {
     if (!target || surface !== 'agent' || id !== target.conversation || loading) return undefined
-    const { call } = target
+    const { call, message } = target
+    const focus = message === undefined ? undefined : `[data-message-outgoing="${message}"]`
     const reveal = (entry: number) =>
-      events.emit('ultimate:reveal-entry', { conversationId: id, entryId: entry })
+      events.emit('ultimate:reveal-entry', { conversationId: id, entryId: entry, focus })
     const loaded = target.entry ?? (call && callerOf(entries, call.split('/')[0])?.id)
     setTarget(undefined)
     if (loaded) {
@@ -81,6 +89,7 @@ function MessageNavigation() {
 
 export default defineWebExtension({
   slots: { overlay: [MessageNavigation] },
+  link: MessageLink,
   entries: {
     'board.message': MessageInput,
     'board.reply': MessageInput,

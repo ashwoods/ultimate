@@ -16,7 +16,7 @@ import { ExtensionBoundary } from '../../app/boundary.tsx'
 import { useExtensions } from '../../sdk/hooks.ts'
 import { codeBlockLanguages, codeBlockRenderers, linkRenderers } from '../../sdk/registry.ts'
 import { codePlugin } from './code-block.tsx'
-import { mentionHref, parseMention, remarkMentions, splitMentions } from './mentions.ts'
+import { parseMention, parseMessageMention, remarkMentions, splitMentions } from './mentions.ts'
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & { from: 'user' | 'assistant' }
 
@@ -48,8 +48,9 @@ const CoreLink = defaultComponents.a
 function Link(props: ComponentProps<'a'> & ExtraProps) {
   const renderers = linkRenderers(useExtensions())
   const { href, children } = props
-  // A `#id` mention stays its text unless a renderer knows the conversation.
-  const core = href && parseMention(href) ? <>{children}</> : <CoreLink {...props} />
+  // A `#id` or `message N` mention stays its text unless a renderer knows what it names.
+  const mention = href && (parseMention(href) || parseMessageMention(href) !== undefined)
+  const core = mention ? <>{children}</> : <CoreLink {...props} />
   // Streamdown marks a link whose Markdown is still streaming.
   if (!href || href === 'streamdown:incomplete-link') return core
   return renderers.reduce<ReactNode>(
@@ -71,7 +72,7 @@ function Link(props: ComponentProps<'a'> & ExtraProps) {
 }
 
 /**
- * Plain text with its `#id` mentions rendered as Markdown mentions are (conversation chips), for text shown verbatim
+ * Plain text with its mentions rendered as Markdown mentions are (conversation chips, message links), for text shown verbatim
  * rather than as Markdown: prompts, abstracts, divergences.
  */
 export function MentionText({ text }: { text: string }) {
@@ -79,7 +80,7 @@ export function MentionText({ text }: { text: string }) {
     typeof part === 'string' ? (
       part
     ) : (
-      <Link href={mentionHref(part.conversation, part.entry)} key={index}>
+      <Link href={part.href} key={index}>
         {part.text}
       </Link>
     ),
