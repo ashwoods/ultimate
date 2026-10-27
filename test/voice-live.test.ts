@@ -529,4 +529,24 @@ export default { name: 'phone' }
   ])
   await until(async () => (await server.harness.snapshot(Activity, voice, context))?.messages === 2)
   expect((await server.harness.snapshot(Activity, voice, context))?.via).toBe('phone')
+  // An agent built on Voice that replaces it becomes the relay, keeping the conversation and its history.
+  await mkdir(join(home, '.ultimate/agents'), { recursive: true })
+  await writeFile(
+    join(home, '.ultimate/agents/relay.md'),
+    '---\nname: relay\nextends: voice\nformerly: [voice]\n---\n\nYou are called Relay.\n',
+  )
+  await writeFile(
+    join(home, '.ultimate/settings.json'),
+    JSON.stringify({ voiceLive: { agent: 'relay' } }),
+  )
+  expect(await phone('open', { session: 'p2' })).toBe(voice)
+  expect(await phone('conversation', null)).toBe(voice)
+  const standing = await server.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context)
+  expect([standing?.relay, standing?.voice]).toEqual([voice, undefined])
+  const relay = await post(server, '/api/extensions/subagents/actions/definition', {
+    args: { name: 'relay' },
+  })
+  expect(relay.data.result.definition.instructions).toMatch(
+    /^You are the voice in the user's ear[\s\S]*You are called Relay\.$/,
+  )
 })
