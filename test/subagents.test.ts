@@ -1635,6 +1635,44 @@ describe('subagents', () => {
     })
     expect(found.replaced).toEqual([])
   })
+  it('starts a definition from an earlier one with extends, and refuses an unknown base', async () => {
+    const repo = await directory(),
+      home = await directory(),
+      cwd = await directory()
+    await mkdir(join(repo, 'agents'))
+    await mkdir(join(home, '.ultimate/agents'), { recursive: true })
+    const modelRuntime = await ModelRuntime.create()
+    await writeFile(
+      join(repo, 'agents/voice.md'),
+      '---\nname: voice\ndescription: Talks\nresident: true\ntools: [read, bash]\nthinking: low\nfast: true\n---\nBase instructions\n',
+    )
+    await writeFile(
+      join(home, '.ultimate/agents/xana.md'),
+      '---\nname: xana\nextends: voice\nthinking: high\nformerly: [voice]\n---\nI am Xana.\n',
+    )
+    await writeFile(
+      join(home, '.ultimate/agents/orphan.md'),
+      '---\nname: orphan\nextends: nobody\n---\nText\n',
+    )
+    const found = await discoverAgents(repo, cwd, home, modelRuntime)
+    expect(found.definitions.find((agent) => agent.name === 'xana')).toMatchObject({
+      name: 'xana',
+      description: 'Talks',
+      resident: true,
+      tools: ['read', 'bash'],
+      fast: true,
+      thinking: 'high',
+      formerly: ['voice'],
+      instructions: 'Base instructions\n\n## xana\n\nI am Xana.',
+    })
+    expect(found.definitions.find((agent) => agent.name === 'voice')).toMatchObject({
+      instructions: 'Base instructions',
+      thinking: 'low',
+    })
+    expect(found.errors.map((file) => [file.name, file.error])).toEqual([
+      ['orphan', expect.stringContaining('extends needs an earlier definition named nobody')],
+    ])
+  })
   it('lets an overlay override settings such as model, thinking and onFailure', async () => {
     const repo = await directory(),
       home = await directory(),

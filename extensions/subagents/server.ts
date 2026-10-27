@@ -42,7 +42,7 @@ import {
   saveDefinition,
   saveOverlay,
 } from '../../lib/agents.ts'
-import type { DefinitionFields } from '../../lib/agents.ts'
+import type { AgentDefinition, DefinitionFields } from '../../lib/agents.ts'
 import { createChild, started } from './children.ts'
 import { implementAction } from '../../lib/actions.ts'
 import { exec } from '../../lib/exec.ts'
@@ -467,6 +467,9 @@ export const actions = {
     )
     const existing = definitions.find((definition) => definition.name === name)
     if (create === true && existing) throw new Error(`A definition named ${name} exists already`)
+    // The form shows the merged instructions; a whole copy would freeze the base's text into the file.
+    if (existing?.extends && !existing.overlays?.length)
+      throw new Error(`${name} extends ${existing.extends}: edit ${existing.path}`)
     const fields: DefinitionFields = {
       description,
       ...(model ? { model } : {}),
@@ -478,6 +481,7 @@ export const actions = {
       ...(onFailure ? { onFailure } : {}),
       ...(fast ? { fast } : {}),
       ...(!summaries ? { summaries } : {}),
+      ...(existing?.formerly ? { formerly: existing.formerly } : {}),
     }
     // The form shows the merged definition; a whole copy would freeze the overlays' additions and the base's
     // instructions, so the save becomes an overlay holding only what differs from the base.
@@ -528,10 +532,27 @@ export default function subagents(
   // Core services, always on; each handle resolves the current provider at every call.
   const conversations = host.need(ConversationsApi)
   const workspaces = host.need(WorkspacesApi)
+  /** Resident definitions, without the ones another resident replaces with `formerly`. */
+  const residentsOf = (definitions: readonly AgentDefinition[]) => {
+    const residents = definitions.filter((definition) => definition.resident === true)
+    const replaced = new Set(residents.flatMap((definition) => definition.formerly ?? []))
+    return residents.filter((definition) => !replaced.has(definition.name))
+  }
   const residentDefinitions = async () =>
-    (
-      await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime)
-    ).definitions.filter((definition) => definition.resident === true)
+    residentsOf(
+      (await discoverAgents(host.ultimateRoot, host.projectRoot, host.userHome, host.modelRuntime))
+        .definitions,
+    )
+  /** A resident without a conversation takes over its former name's: the conversation keeps its id and history. */
+  const adoptFormer = (index: Record<string, number>, residents: readonly AgentDefinition[]) => {
+    for (const { name, formerly } of residents) {
+      if (Object.hasOwn(index, name)) continue
+      const former = formerly?.find((old) => Object.hasOwn(index, old))
+      if (former === undefined) continue
+      index[name] = index[former]
+      delete index[former]
+    }
+  }
   /** Drops standing agents whose definition is gone; their conversations become ordinary ones. Retirement waits
    * until every definition parses: an error names a file, not the agent it defines, so a typo retires nothing. The
    * ones kept, every one while a definition fails to parse, get their automatic summaries turned off and stay
@@ -543,13 +564,11 @@ export default function subagents(
       host.userHome,
       host.modelRuntime,
     )
-    const kept = new Set(
-      definitions
-        .filter((definition) => definition.resident === true)
-        .map((definition) => definition.name),
-    )
+    const residents = residentsOf(definitions)
+    const kept = new Set(residents.map((definition) => definition.name))
     await host.harness().commit(async (tx) => {
       const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+      adoptFormer(index, residents)
       for (const name of Object.keys(index)) {
         const id = index[name]
         const exists = await tx.conversation(id)
@@ -605,6 +624,7 @@ export default function subagents(
       const main = await root.agent(ctx)
       return host.harness().commit(async (tx) => {
         const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
+        adoptFormer(index, definitions)
         let id = Object.hasOwn(index, name) ? index[name] : undefined
         let created: ConversationRecord | undefined
         // A new conversation starts on the default model; an existing one keeps the model and thinking level chosen

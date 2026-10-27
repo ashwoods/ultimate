@@ -33,6 +33,10 @@ export interface AgentDefinition {
   fast?: boolean
   /** `false`: its conversations get no automatic summaries (intent, title, reply activity, spawn refresh, abstract). */
   summaries?: boolean
+  /** The earlier definition this one started from: it inherits every field it does not set, and its body follows the base's. */
+  extends?: string
+  /** Standing agents (resident definitions) this one replaces: their conversations become this agent's. */
+  formerly?: string[]
   /** Overlay files whose settings, `addTools` and body discovery merged into this definition, in order. */
   overlays?: string[]
 }
@@ -171,6 +175,7 @@ const fields = new Set([
   'fast',
   'summaries',
 ])
+const definitionFields = new Set([...fields, 'extends', 'formerly'])
 
 /** The settings a definition or overlay may set; `denyTools` is additive when merged. */
 function parseSettings(frontmatter: Record<string, unknown>): Partial<
@@ -236,22 +241,36 @@ export function parseDefinition(
     !Object.keys(frontmatter).length
   )
     throw new Error('Expected frontmatter fields between --- lines')
-  const { name, tools } = frontmatter
-  const unknown = Object.keys(frontmatter).find((key) => !fields.has(key))
+  const { name, tools, formerly } = frontmatter
+  const base = frontmatter.extends
+  const unknown = Object.keys(frontmatter).find((key) => !definitionFields.has(key))
   if (unknown) throw new Error(`Unknown field: ${unknown}`)
   if (typeof name !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(name))
     throw new Error('name must be a nonempty identifier')
+  if (base !== undefined && (typeof base !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(base)))
+    throw new Error('extends must be the name of an agent')
+  if (
+    formerly !== undefined &&
+    !(
+      Array.isArray(formerly) &&
+      formerly.every((item) => typeof item === 'string' && /^[a-zA-Z0-9_-]+$/.test(item))
+    )
+  )
+    throw new Error('formerly must be a list of agent names')
   const { description, ...settings } = parseSettings(frontmatter)
-  if (!description) throw new Error('description is required')
+  // A definition that extends another inherits its description and may add nothing to its instructions.
+  if (!description && base === undefined) throw new Error('description is required')
   if (tools !== undefined && !isTools(tools)) throw new Error('tools must be a list of tool names')
-  if (!body) throw new Error('Instructions are required')
+  if (!body && base === undefined) throw new Error('Instructions are required')
   return {
     name,
-    description,
+    description: description ?? '',
     path,
     instructions: body,
     ...settings,
     ...(tools ? { tools } : {}),
+    ...(base ? { extends: base } : {}),
+    ...(formerly?.length ? { formerly } : {}),
   }
 }
 
@@ -382,6 +401,23 @@ export async function discoverAgents(
           continue
         }
         const definition = readDefinition(text, path, modelRuntime)
+        if (definition.extends !== undefined) {
+          const base = definitions.get(definition.extends)
+          if (!base)
+            throw new Error(`extends needs an earlier definition named ${definition.extends}`)
+          // The base's overlays are already in its instructions; the base's own `formerly` stays with the base.
+          const { overlays: _overlays, formerly: _formerly, source: _source, ...inherited } = base
+          definitions.set(definition.name, {
+            ...inherited,
+            ...definition,
+            description: definition.description || base.description,
+            instructions: definition.instructions
+              ? `${base.instructions}\n\n## ${definition.name}\n\n${definition.instructions}`
+              : base.instructions,
+            source,
+          })
+          continue
+        }
         if (source === 'builtin') builtins.add(definition.name)
         else if (builtins.has(definition.name))
           replaced.push({ name: definition.name, path, source })
@@ -412,6 +448,7 @@ export interface DefinitionFields {
   onFailure?: 'diagnose' | 'fix'
   fast?: boolean
   summaries?: boolean
+  formerly?: string[]
 }
 
 /** A flow list of tool names; in a flow list, commas and brackets end an item too. */
@@ -446,6 +483,7 @@ export function serializeDefinition(
     ...(frontmatter.onFailure ? [`onFailure: ${frontmatter.onFailure}`] : []),
     ...(frontmatter.fast ? ['fast: true'] : []),
     ...(frontmatter.summaries === false ? ['summaries: false'] : []),
+    ...(frontmatter.formerly?.length ? [`formerly: ${toolList(frontmatter.formerly)}`] : []),
   ]
   return `---\n${lines.join('\n')}\n---\n\n${instructions.trim()}\n`
 }

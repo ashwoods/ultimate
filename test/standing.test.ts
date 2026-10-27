@@ -207,6 +207,34 @@ it('retires a standing agent whose definition is deleted on the next open, only 
   expect(await retired!.agent(ctx)).toMatchObject({ instructions: 'Original' })
 })
 
+it('gives a standing conversation to the resident that replaces its agent with formerly', async () => {
+  const { service, host, path, reopen } = await fixture()
+  const id = await service.standing('x', ctx)
+  await writeFile(
+    join(path, 'agents/y.md'),
+    '---\nname: y\ndescription: Renamed\nresident: true\nformerly: [x]\n---\nRenamed instructions\n',
+  )
+  // Whichever runs first moves the entry: the open-time prune here, `standing` in the second half.
+  expect(await service.residents(ctx)).toEqual([{ name: 'y', description: 'Renamed' }])
+  await reopen()
+  expect(await host.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ y: id })
+  expect(await service.standing('y', ctx)).toBe(id)
+  expect(await host.harness.snapshot(Metadata, id, ctx)).toMatchObject({ title: '@y' })
+  expect(await host.harness.snapshot(Profile, id, ctx)).toEqual({ definition: 'y' })
+  await expect(service.standing('x', ctx)).rejects.toThrow('Standing agents: @y')
+
+  // `standing` alone also moves it, before any prune ran.
+  const { service: second, host: other, path: dir } = await fixture()
+  const kept = await second.standing('x', ctx)
+  await writeFile(
+    join(dir, 'agents/y.md'),
+    '---\nname: y\ndescription: Renamed\nresident: true\nformerly: [x]\n---\nRenamed\n',
+  )
+  expect(await second.standing('y', ctx)).toBe(kept)
+  expect(await other.harness.snapshot(Standing, ROOT_CONVERSATION_ID, ctx)).toEqual({ y: kept })
+  expect(await other.harness.snapshot(Metadata, kept, ctx)).toMatchObject({ title: '@y' })
+})
+
 it('keeps a model chosen in the standing conversation across refreshes unless the definition pins one', async () => {
   const { service, host, file } = await fixture()
   await host.harness.commit(async (tx) => {
