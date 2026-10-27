@@ -11,8 +11,8 @@ export interface VoiceLiveService {
    * Repeating a session id writes nothing twice. Returns the Voice conversation id.
    */
   open(session: string): Promise<number>
-  /** A finished transcript from the phone. A repeated `id` is admitted once. */
-  heard(text: string, id: string): Promise<void>
+  /** A finished transcript from the phone, or a line the user typed (`typed: 'text'`). A repeated `id` is admitted once. */
+  heard(text: string, id: string, typed?: 'voice' | 'text'): Promise<void>
   /** The Voice conversation id, once it exists. */
   conversation(): Promise<number | undefined>
 }

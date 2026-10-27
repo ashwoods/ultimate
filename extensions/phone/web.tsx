@@ -161,8 +161,16 @@ function CheckAgain({ phone }: { phone: Phone }) {
 }
 
 /** What the server says is missing, with the way to add it: the Secrets panel for the token. */
-function Unconfigured({ error, phone }: { error?: string; phone: Phone }) {
-  const secret = error?.match(/\bULTIMATE_[A-Z_]+\b/)?.[0]
+function Unconfigured({
+  error,
+  missing,
+  phone,
+}: {
+  error?: string
+  missing?: PhoneStatus['missing']
+  phone: Phone
+}) {
+  const secret = missing === 'token' ? 'ULTIMATE_PHONE_RELAY_TOKEN' : undefined
   return (
     <Problem title="Finish setting up the relay">
       {error && (
@@ -374,7 +382,8 @@ function Request({
   onAllowed: () => void
   onDenied: () => void
 }) {
-  const mac = useSystem()?.machine.hostname ?? 'this Mac'
+  const system = useSystem()
+  const mac = phone.status?.name ?? system?.machine.hostname ?? 'this Mac'
   const { busy, error, run } = useRun()
   return (
     <div className="mt-3 rounded-md border border-brand/50 bg-brand/5 p-3" role="alertdialog">
@@ -497,7 +506,9 @@ function Details({ phone }: { phone: Phone }) {
           </p>
         </>
       )}
-      {state === 'unconfigured' && <Unconfigured error={status?.error} phone={phone} />}
+      {state === 'unconfigured' && (
+        <Unconfigured error={status?.error} missing={status?.missing} phone={phone} />
+      )}
       {state === 'error' && (
         <Problem title="Phones can't reach this Mac">
           {status?.error && (

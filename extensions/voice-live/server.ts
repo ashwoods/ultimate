@@ -454,8 +454,11 @@ async function hear(host: ExtensionHost, data: VoiceHeard, intro: string, reques
   )
 }
 
-const PHONE_INTRO =
-  'The user, on their phone (push-to-talk, on-device transcript, may contain mistakes). No live voice model is on this call: you are the only voice, so speak with voice_say:'
+const PHONE_INTRO = {
+  voice:
+    'The user, on their phone (push-to-talk, on-device transcript, may contain mistakes). No live voice model is on this call: you are the only voice, so speak with voice_say:',
+  text: 'The user, on their phone, typed this. No live voice model is on this call: you are the only voice, so speak with voice_say:',
+}
 
 /** What other extensions use to drive Voice from a phone: no OpenAI key, no GPT-Live. */
 export const phone = (host: ExtensionHost): VoiceLiveService => ({
@@ -472,9 +475,9 @@ export const phone = (host: ExtensionHost): VoiceLiveService => ({
     placeBriefLater(host, id, session, makeBrief(host, main))
     return id
   },
-  heard: (text, id) => {
+  heard: (text, id, typed = 'voice') => {
     if (!text.trim()) throw new Error('Expected text')
-    return hear(host, { text: text.trim(), via: 'phone' }, PHONE_INTRO, `voice:heard:${id}`)
+    return hear(host, { text: text.trim(), via: 'phone' }, PHONE_INTRO[typed], `voice:heard:${id}`)
   },
   async conversation() {
     return (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.voice

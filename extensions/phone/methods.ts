@@ -95,7 +95,7 @@ export const methods: Record<string, Method> = {
     }
     try {
       await opened
-      await services.voice.heard(said, id)
+      await services.voice.heard(said, id, params.via)
     } catch (error) {
       throw new RpcError(error instanceof Error ? error.message : String(error))
     }
