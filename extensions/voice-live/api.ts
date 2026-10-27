@@ -16,5 +16,5 @@ export interface VoiceLiveService {
   /** The Voice conversation id, once it exists. */
   conversation(): Promise<number | undefined>
 }
-/** Phone sessions for Voice; `want` it, since voice-live is optional. */
+/** Phone sessions for Voice; the phone extension `need`s it. */
 export const VoiceLiveApi = defineApi<VoiceLiveService>()('voice-live')

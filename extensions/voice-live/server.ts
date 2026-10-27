@@ -244,6 +244,32 @@ async function answerVoice(
   )
 }
 
+/**
+ * Tell the feed and Voice that the forwarded `line` got no answer: a notice linked to it (the job fails) and the
+ * failure said to Voice. Stable request ids make a repeat after a crash or a second path write nothing twice.
+ */
+async function failLine(host: ExtensionHost, voice: number, line: number, text: string) {
+  // Said out loud too: the user waits by ear, so a silent failure looks like nothing happened.
+  await write(
+    host,
+    voice as ConversationId,
+    'voice.line',
+    { role: 'notice', text, re: line },
+    `voice:notice:${line}`,
+  )
+  await answerVoice(host, voice, line, 'Ultimate did not answer that request.')
+}
+
+/** The id of the forwarded line of `input`: written once per request, so this finds it or writes it. */
+const lineOf = (host: ExtensionHost, input: { voice: number; request: string; text: string }) =>
+  write(
+    host,
+    input.voice as ConversationId,
+    'voice.line',
+    userLine(input),
+    `voice:line:${input.request}`,
+  )
+
 export function answerTask(host: ExtensionHost) {
   return defineTask<
     {
@@ -263,177 +289,191 @@ export function answerTask(host: ExtensionHost) {
     phases: {
       answer: async (task, runtime, ctx) => {
         const input = task.input
-        const main = input.main as ConversationId
-        const recipient = (await host.harness().conversation(main, ctx))!
-        const line = await write(
-          host,
-          input.voice as ConversationId,
-          'voice.line',
-          userLine(input),
-          `voice:line:${input.request}`,
-        )
-        // The open question this utterance answers, chosen once: after our own answer it is no longer open.
-        let question = await runtime.memo<number | false>('question', ctx)
-        if (question === undefined) {
+        try {
+          const main = input.main as ConversationId
+          const recipient = (await host.harness().conversation(main, ctx))!
+          const line = await lineOf(host, input)
+          // The open question this utterance answers, chosen once: after our own answer it is no longer open.
+          let question = await runtime.memo<number | false>('question', ctx)
+          if (question === undefined) {
+            const log = await runtime.snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
+            const open = log?.messages.findLast(
+              (m) => m.from === main && m.to === 'user' && m.reply && m.state === 'delivered',
+            )
+            question = await runtime.memo('question', open?.id ?? false, ctx)
+          }
+          let receipt
+          // A crash after answer() finds this utterance's own reply by its text, never another answer to the question.
           const log = await runtime.snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
-          const open = log?.messages.findLast(
-            (m) => m.from === main && m.to === 'user' && m.reply && m.state === 'delivered',
-          )
-          question = await runtime.memo('question', open?.id ?? false, ctx)
-        }
-        let receipt
-        // A crash after answer() finds this utterance's own reply by its text, never another answer to the question.
-        const log = await runtime.snapshot(Messages, ROOT_CONVERSATION_ID, ctx)
-        const previous =
-          question === false
-            ? undefined
-            : log?.messages.find(
-                (m) => m.from === 'user' && m.re === question && m.text === input.text,
-              )
-        const reply =
-          question === false
-            ? undefined
-            : (previous?.id ??
-              (await host
-                .need(MessagesApi)
-                .answer(question, input.text, ctx)
-                .catch((error: unknown) => {
-                  // Answered meanwhile (its card, another utterance): this utterance goes in as plain voice input.
-                  if (
-                    error instanceof Error &&
-                    error.message === 'These questions are no longer open'
-                  )
-                    return undefined
-                  throw error
-                })))
-        if (reply !== undefined) {
-          const watch = (await runtime.watchDoc(Messages, ROOT_CONVERSATION_ID, ctx))!
-          const placed = Promise.withResolvers<void>()
-          const inspect = (value: typeof watch.value) => {
-            const m = value?.messages.find((candidate) => candidate.id === reply)
-            if (m?.entry) placed.resolve()
-            else if (m && ['failed', 'stopped'].includes(m.state))
-              placed.reject(new Error(m.error ?? 'Voice reply was not delivered'))
-          }
-          watch.start(async (value) => {
-            inspect(value)
-          })
-          try {
-            inspect(watch.value)
-            await awaitWithContext(placed.promise, ctx)
-          } finally {
-            await watch.stop()
-          }
-          let cursor: Cursor | undefined
-          do {
-            const page = await host.scanSubmissions({ conversationId: main }, 100, cursor, ctx)
-            const found = page.items.find((s) => s.requestId === `board:${reply}`)
-            if (found) {
-              receipt = await host.harness().submission(found.id, ctx)
-              break
+          const previous =
+            question === false
+              ? undefined
+              : log?.messages.find(
+                  (m) => m.from === 'user' && m.re === question && m.text === input.text,
+                )
+          const reply =
+            question === false
+              ? undefined
+              : (previous?.id ??
+                (await host
+                  .need(MessagesApi)
+                  .answer(question, input.text, ctx)
+                  .catch((error: unknown) => {
+                    // Answered meanwhile (its card, another utterance): this utterance goes in as plain voice input.
+                    if (
+                      error instanceof Error &&
+                      error.message === 'These questions are no longer open'
+                    )
+                      return undefined
+                    throw error
+                  })))
+          if (reply !== undefined) {
+            const watch = (await runtime.watchDoc(Messages, ROOT_CONVERSATION_ID, ctx))!
+            const placed = Promise.withResolvers<void>()
+            const inspect = (value: typeof watch.value) => {
+              const m = value?.messages.find((candidate) => candidate.id === reply)
+              if (m?.entry) placed.resolve()
+              else if (m && ['failed', 'stopped'].includes(m.state))
+                placed.reject(new Error(m.error ?? 'Voice reply was not delivered'))
             }
-            cursor = page.next
-          } while (cursor)
-          if (!receipt) throw new Error('Voice question reply has no input receipt')
-        } else {
-          receipt = await recipient.submit(
-            {
-              type: 'input',
-              requestId: `voice:${line}`,
-              whenBusy: 'steer',
-              entry: {
-                kind: 'voice.utterance',
-                data: { text: input.text, line },
+            watch.start(async (value) => {
+              inspect(value)
+            })
+            try {
+              inspect(watch.value)
+              await awaitWithContext(placed.promise, ctx)
+            } finally {
+              await watch.stop()
+            }
+            let cursor: Cursor | undefined
+            do {
+              const page = await host.scanSubmissions({ conversationId: main }, 100, cursor, ctx)
+              const found = page.items.find((s) => s.requestId === `board:${reply}`)
+              if (found) {
+                receipt = await host.harness().submission(found.id, ctx)
+                break
+              }
+              cursor = page.next
+            } while (cursor)
+            if (!receipt) throw new Error('Voice question reply has no input receipt')
+          } else {
+            receipt = await recipient.submit(
+              {
+                type: 'input',
+                requestId: `voice:${line}`,
+                whenBusy: 'steer',
+                entry: {
+                  kind: 'voice.utterance',
+                  data: { text: input.text, line },
+                },
+                content: `The user, through their Voice agent (spoken or typed, may contain transcription mistakes):\n${input.text}`,
               },
-              content: `The user, by voice (live transcript, may contain mistakes):\n${input.text}`,
-            },
-            ctx,
-          )
-        }
-        const settled = await receipt.wait(ctx)
-        if (settled.status !== 'done' || settled.type !== 'input') {
-          // Said out loud too: the user waits by ear, so a silent failure looks like nothing happened.
-          await write(
+              ctx,
+            )
+          }
+          const settled = await receipt.wait(ctx)
+          if (settled.status !== 'done' || settled.type !== 'input') {
+            await failLine(
+              host,
+              input.voice,
+              line,
+              settled.status === 'unanswered' && settled.reason === 'aborted'
+                ? 'Ultimate was stopped before it answered.'
+                : 'Ultimate did not answer that.',
+            )
+            await runtime.commit(
+              () => ({
+                status: 'terminal',
+                outcome: {
+                  status: 'failed',
+                  error: { message: 'Ultimate did not answer the voice input' },
+                },
+              }),
+              ctx,
+            )
+            return
+          }
+          const source = await host.harness().commit(async (tx) => {
+            const answer = await tx.entry(AssistantEntry, settled.answer)
+            const message = answer?.model?.[0]
+            const plain =
+              message?.role === 'assistant'
+                ? message.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
+                : ''
+            // A tool-terminated message can have no final prose. Match calls in this run, not another concurrent run.
+            const calls = new Set<string>()
+            let cursor: Cursor | undefined
+            do {
+              const page = await tx.scanEntries(
+                {
+                  conversationId: main,
+                  minEntryId: settled.entry,
+                  maxEntryId: settled.answer,
+                  order: 'ascending',
+                },
+                100,
+                cursor,
+              )
+              for (const entry of page.items)
+                for (const m of entry.model ?? [])
+                  if (m.role === 'assistant')
+                    for (const p of m.content) if (p.type === 'toolCall') calls.add(p.id)
+              cursor = page.next
+            } while (cursor)
+            const sent = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.findLast(
+              (m) =>
+                m.id >= input.firstMessage &&
+                m.from === main &&
+                m.to === 'user' &&
+                m.call &&
+                [...calls].some((call) => m.call === call || m.call!.startsWith(`${call}/`)),
+            )
+            return sent
+              ? `${sent.text}${sent.questions?.length ? `\n\nQuestions:\n${questionsText(sent.questions)}` : ''}`
+              : plain
+          }, ctx)
+          await answerVoice(
             host,
-            input.voice as ConversationId,
-            'voice.line',
+            input.voice,
+            line,
+            source || 'Ultimate finished without an answer.',
             {
-              role: 'notice',
-              text:
-                settled.status === 'unanswered' && settled.reason === 'aborted'
-                  ? 'Ultimate was stopped before it answered.'
-                  : 'Ultimate did not answer that.',
-              re: line,
+              conversation: main,
+              entry: settled.answer,
             },
-            `voice:notice:${line}`,
           )
-          await answerVoice(host, input.voice, line, 'Ultimate did not answer that request.')
+          await runtime.commit(() => terminal, ctx)
+        } catch (error) {
+          // The harness closing resumes this task later; any other failure ends the answer, and the phone's job with it.
+          if (runtime.signal.aborted) throw error
+          await failLine(
+            host,
+            input.voice,
+            await lineOf(host, input),
+            'Ultimate did not answer that.',
+          )
           await runtime.commit(
             () => ({
               status: 'terminal',
               outcome: {
                 status: 'failed',
-                error: { message: 'Ultimate did not answer the voice input' },
+                error: { message: error instanceof Error ? error.message : String(error) },
               },
             }),
             ctx,
           )
-          return
         }
-        const source = await host.harness().commit(async (tx) => {
-          const answer = await tx.entry(AssistantEntry, settled.answer)
-          const message = answer?.model?.[0]
-          const plain =
-            message?.role === 'assistant'
-              ? message.content.flatMap((p) => (p.type === 'text' ? [p.text] : [])).join('')
-              : ''
-          // A tool-terminated message can have no final prose. Match calls in this run, not another concurrent run.
-          const calls = new Set<string>()
-          let cursor: Cursor | undefined
-          do {
-            const page = await tx.scanEntries(
-              {
-                conversationId: main,
-                minEntryId: settled.entry,
-                maxEntryId: settled.answer,
-                order: 'ascending',
-              },
-              100,
-              cursor,
-            )
-            for (const entry of page.items)
-              for (const m of entry.model ?? [])
-                if (m.role === 'assistant')
-                  for (const p of m.content) if (p.type === 'toolCall') calls.add(p.id)
-            cursor = page.next
-          } while (cursor)
-          const sent = (await tx.doc(Messages, ROOT_CONVERSATION_ID)).messages.findLast(
-            (m) =>
-              m.id >= input.firstMessage &&
-              m.from === main &&
-              m.to === 'user' &&
-              m.call &&
-              [...calls].some((call) => m.call === call || m.call!.startsWith(`${call}/`)),
-          )
-          return sent
-            ? `${sent.text}${sent.questions?.length ? `\n\nQuestions:\n${questionsText(sent.questions)}` : ''}`
-            : plain
-        }, ctx)
-        await answerVoice(
-          host,
-          input.voice,
-          line,
-          source || 'Ultimate finished without an answer.',
-          {
-            conversation: main,
-            entry: settled.answer,
-          },
-        )
-        await runtime.commit(() => terminal, ctx)
       },
     },
-    abort: (_task, runtime, ctx) =>
-      runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx),
+    abort: async (task, runtime, ctx) => {
+      await failLine(
+        host,
+        task.input.voice,
+        await lineOf(host, task.input),
+        'Ultimate was stopped before it answered.',
+      )
+      await runtime.commit(() => ({ status: 'terminal', outcome: { status: 'aborted' } }), ctx)
+    },
   })
 }
 

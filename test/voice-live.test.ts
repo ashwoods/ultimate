@@ -269,6 +269,26 @@ it('delivers a stopped-input notice and agent input with distinct request ids', 
   })
 })
 
+it('leaves a notice for a forwarded line whose answer task is aborted', async () => {
+  const f = await fixture()
+  f.setAnswer('HOLD')
+  await f.action('heard', { text: 'check tests' })
+  await until(async () => (await f.entries(f.main)).some((e) => e.kind === 'voice.utterance'))
+  const tasks = await f.server.harness.commit(
+    async (tx) => (await tx.scanTasks({ kind: 'voice-live.answer' }, 10)).items,
+    context,
+  )
+  expect(tasks).toHaveLength(1)
+  await f.server.harness.abortTask(tasks[0].id, context)
+  await until(() => f.answers.length > 0)
+  const lines = (await f.entries(f.voice)).filter((e) => e.kind === 'voice.line')
+  const forwarded = lines.find((e) => (e.data as VoiceLine).forwarded)!
+  expect(lines.filter((e) => (e.data as VoiceLine).role === 'notice').map((e) => e.data)).toEqual([
+    { role: 'notice', text: 'Ultimate was stopped before it answered.', re: forwarded.id },
+  ])
+  expect(f.answers[0]).toContain('Ultimate did not answer that request.')
+})
+
 it('answers a connection check itself in the standing Voice conversation, with its relay tools and codemode', async () => {
   const f = await fixture()
   expect((await f.server.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context))?.voice).toBe(
