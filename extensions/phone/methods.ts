@@ -1,6 +1,9 @@
 /** The methods a paired phone can call. Add a method to `methods`; `channel.ts` dispatches by name. */
 import type { ExtensionHost } from '../../server/extensions.ts'
-import { instanceId } from './crypto.ts'
+import type { VoiceLiveService } from '../voice-live/api.ts'
+import { instanceId, randomToken } from './crypto.ts'
+import type { Feed } from './feed.ts'
+import { MAX_ITEMS } from './feed.ts'
 import type { Pairing } from './pairing.ts'
 import type { PhoneState } from './state.ts'
 
@@ -10,6 +13,9 @@ export type Services = {
   instance: string
   host: Pick<ExtensionHost, 'projects'>
   pairing: Pairing
+  /** Voice, which `say` talks into. */
+  voice: Pick<VoiceLiveService, 'open' | 'heard'>
+  feed: Pick<Feed, 'join'>
   state(): Promise<PhoneState>
   update(modify: (state: PhoneState) => void): Promise<void>
   /** The user's `phone` settings object. */
@@ -25,7 +31,7 @@ export type Call = {
   /** Aborted when its channel closes. */
   signal: AbortSignal
   /** Send a `{ event, data }` message to this phone. */
-  emit(event: string, data: unknown): void
+  emit: (event: string, data: unknown) => void
 }
 export type Method = (params: Record<string, unknown>, call: Call) => Promise<object> | object
 
@@ -48,6 +54,10 @@ export const DEFAULT_VOICE = 'EXAVITQu4vr4xnSDxMaL'
 export const DEFAULT_MODEL = 'eleven_flash_v2_5'
 const MAX_ACTIVITIES = 20
 
+/** The Voice phone session each channel opened, and the feed subscription each holds. */
+const sessions = new WeakMap<AbortSignal, Promise<unknown>>()
+const subscriptions = new WeakMap<AbortSignal, () => void>()
+
 export const methods: Record<string, Method> = {
   async pair(params, { services, device, signal }) {
     const name =
@@ -69,6 +79,44 @@ export const methods: Record<string, Method> = {
   },
 
   ping: () => ({}),
+
+  async say(params, { services, device, signal }) {
+    const id = text(params.id, 'id', 100)
+    const said = text(params.text, 'text', 8000).trim()
+    if (!said) throw new RpcError('text is missing')
+    if (params.via !== 'voice' && params.via !== 'text')
+      throw new RpcError('via must be "voice" or "text"')
+    // One Voice session per channel; a reconnect is a new session. A failed open is tried again by the next say.
+    let opened = sessions.get(signal)
+    if (!opened) {
+      opened = services.voice.open(`${device.id}:${randomToken(8)}`)
+      sessions.set(signal, opened)
+      opened.catch(() => sessions.delete(signal))
+    }
+    try {
+      await opened
+      await services.voice.heard(said, id)
+    } catch (error) {
+      throw new RpcError(error instanceof Error ? error.message : String(error))
+    }
+    return {}
+  },
+
+  async 'feed.subscribe'(params, { services, signal, emit }) {
+    const asked = params.limit ?? 50
+    if (typeof asked !== 'number' || !Number.isInteger(asked) || asked < 1)
+      throw new RpcError('limit must be a positive integer')
+    const { items, leave } = await services.feed.join(Math.min(asked, MAX_ITEMS), (changed) =>
+      emit('feed', { items: changed }),
+    )
+    subscriptions.get(signal)?.()
+    if (signal.aborted) leave()
+    else {
+      subscriptions.set(signal, leave)
+      signal.addEventListener('abort', leave, { once: true })
+    }
+    return { items }
+  },
 
   async instances(_params, { services }) {
     const secret = Buffer.from((await services.state()).machineSecret, 'base64url')

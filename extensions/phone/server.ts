@@ -1,6 +1,8 @@
 import { defineExtension } from '@earendil-works/pi-durable'
 import { implementAction } from '../../lib/actions.ts'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { VoiceLiveApi } from '../voice-live/api.ts'
+import { harnessSource } from './feed.ts'
 import { createPhone } from './runtime.ts'
 import {
   PairAllowAction,
@@ -21,6 +23,12 @@ export const secrets = [
     description:
       'ElevenLabs API key; the phone app speaks answers with a single-use token minted from it',
     url: 'https://elevenlabs.io/app/settings/api-keys',
+  },
+  {
+    name: 'APNS_AUTH_KEY',
+    description:
+      'Apple push key (.p8 file contents) the Mac signs notifications for the phone app with',
+    url: 'https://developer.apple.com/account/resources/authkeys/list',
   },
 ]
 export const reloadOnSettings = true
@@ -50,9 +58,11 @@ export const actions = {
 
 /** Serves paired phones through the user's relay. Off by default and inert until `phone.relay` and its token are set. */
 export default function phone(host: ExtensionHost) {
-  const service = createPhone(host)
+  const voice = host.need(VoiceLiveApi)
+  const service = createPhone(host, { voice, source: harnessSource(host, voice) })
   phones.set(host, service)
   host.onOpen(service.start)
+  host.onRelease(async () => service.release())
   host.onClose(async () => service.stop())
   return defineExtension({ name: 'phone' })
 }

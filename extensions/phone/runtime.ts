@@ -5,11 +5,17 @@ import type { ExtensionHost } from '../../server/extensions.ts'
 import { readJson } from '../../lib/json-file.ts'
 import { readSecret } from '../../lib/secrets.ts'
 import { readSettings, userSettingsPath } from '../../lib/settings.ts'
+import type { VoiceLiveService } from '../voice-live/api.ts'
+import { createApns } from './apns.ts'
+import type { Apns, ApnsConfig } from './apns.ts'
 import { UNAUTHORIZED } from './channel.ts'
 import { Connector } from './connector.ts'
 import type { Connect } from './connector.ts'
 import { instanceId, pairingQr, randomToken, tokenHash } from './crypto.ts'
+import { createFeed } from './feed.ts'
+import type { FeedSource } from './feed.ts'
 import { Pairing } from './pairing.ts'
+import { Pusher } from './push.ts'
 import type { Services } from './methods.ts'
 import type { PhoneStatus } from './refs.ts'
 import { loadState, statePath, updateState } from './state.ts'
@@ -17,6 +23,11 @@ import type { PhoneState } from './state.ts'
 
 type PhoneHost = Pick<ExtensionHost, 'userHome' | 'projectRoot' | 'home' | 'projects' | 'notice'>
 export type PhoneDeps = {
+  /** Voice, which `say` talks into and whose transcript the feed follows. */
+  voice: VoiceLiveService
+  source: FeedSource
+  /** The APNs client for a configuration; tests give one that sends nothing. */
+  apns?: (config: ApnsConfig) => Apns
   env?: NodeJS.ProcessEnv
   connect?: Connect
   fetch?: typeof fetch
@@ -31,7 +42,7 @@ const defaultConnect: Connect = (url, headers) =>
 
 type Setup = { relay: string; token: string }
 
-export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
+export function createPhone(host: PhoneHost, deps: PhoneDeps) {
   const env = deps.env ?? process.env
   const path = statePath(host.userHome, env)
   // Only the project's own server (on its default home) goes online; a preview or scratch home stays off unless asked.
@@ -41,6 +52,8 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
   let relay: string | undefined
   let starting: Promise<void> | undefined
   let stopped = false
+  let opened = false
+  let apns: { signature: string; client: Apns } | undefined
 
   const settings = async () => {
     // Invalid user settings are reported by the settings loader; treat them as unset here.
@@ -48,6 +61,7 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
     const phone = 'phone' in user ? user.phone : undefined
     return (phone && typeof phone === 'object' && !Array.isArray(phone) ? phone : {}) as {
       relay?: unknown
+      apns?: { keyId?: unknown; teamId?: unknown; topic?: unknown }
       elevenlabs?: { voice?: string; model?: string }
     }
   }
@@ -71,6 +85,19 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
       return { deviceToken }
     },
   })
+  const feed = createFeed(deps.source, { notice: (message) => host.notice(message) })
+  const pusher = new Pusher({
+    instance: () => instance!,
+    now: Date.now,
+    apns: async () => {
+      const setup = await pushSetup()
+      return 'missing' in setup ? undefined : setup
+    },
+    state: { read: () => loadState(path), update: (modify) => updateState(path, modify) },
+    schedule: feed.wake,
+    notice: (message) => host.notice(message),
+  })
+  feed.observe((items) => pusher.observe(items))
   const services: Services = {
     get instance() {
       return instance!
@@ -82,19 +109,61 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
     settings,
     secret: (name) => readSecret(host.userHome, name),
     fetch: deps.fetch ?? fetch,
+    voice: deps.voice,
+    feed,
+  }
+
+  /** The APNs sender and topic, or what is missing for push. */
+  async function pushSetup(): Promise<{ missing: string } | { send: Apns['send']; topic: string }> {
+    const { apns: configured } = await settings()
+    const { keyId, teamId, topic } = configured ?? {}
+    if (
+      typeof keyId !== 'string' ||
+      typeof teamId !== 'string' ||
+      typeof topic !== 'string' ||
+      !keyId ||
+      !teamId ||
+      !topic
+    )
+      return {
+        missing:
+          'Set "phone": { "apns": { "keyId", "teamId", "topic" } } in ~/.ultimate/settings.json',
+      }
+    const key = await readSecret(host.userHome, 'APNS_AUTH_KEY')
+    if (!key) return { missing: 'Add APNS_AUTH_KEY in the Secrets panel (⌘K → Secrets)' }
+    const signature = JSON.stringify([keyId, teamId, key])
+    if (apns?.signature !== signature) {
+      apns?.client.close()
+      apns = { signature, client: (deps.apns ?? createApns)({ keyId, teamId, key }) }
+    }
+    return { send: apns.client.send, topic }
+  }
+  const pushStatus = async (): Promise<PhoneStatus['push']> => {
+    const setup = await pushSetup()
+    return 'missing' in setup ? { configured: false, error: setup.missing } : { configured: true }
   }
 
   /** What is missing for the relay, or the relay and its token. */
-  async function configuration(): Promise<Setup | { off: true } | { missing: string }> {
+  async function configuration(): Promise<
+    Setup | { off: true } | { missing: string; kind: 'relay' | 'token' }
+  > {
     if (!env.ULTIMATE_PHONE_RELAY && temporary) return { off: true }
     const configured = env.ULTIMATE_PHONE_RELAY || (await settings()).relay
     if (typeof configured !== 'string' || !configured)
-      return { missing: 'Set "phone": { "relay": "wss://…" } in ~/.ultimate/settings.json' }
+      return {
+        missing: 'Set "phone": { "relay": "wss://…" } in ~/.ultimate/settings.json',
+        kind: 'relay',
+      }
     if (!/^wss?:\/\/[^/\s]/.test(configured))
-      return { missing: 'phone.relay must be a ws:// or wss:// URL' }
-    const token = await readSecret(host.userHome, 'ULTIMATE_PHONE_RELAY_TOKEN')
+      return { missing: 'phone.relay must be a ws:// or wss:// URL', kind: 'relay' }
+    const token =
+      env.ULTIMATE_PHONE_RELAY_TOKEN ||
+      (await readSecret(host.userHome, 'ULTIMATE_PHONE_RELAY_TOKEN'))
     if (!token)
-      return { missing: 'Add ULTIMATE_PHONE_RELAY_TOKEN in the Secrets panel (⌘K → Secrets)' }
+      return {
+        missing: 'Add ULTIMATE_PHONE_RELAY_TOKEN in the Secrets panel (⌘K → Secrets)',
+        kind: 'token',
+      }
     return { relay: configured, token }
   }
 
@@ -119,8 +188,14 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
         },
       })
       connector.start()
+      follow()
     })().finally(() => (starting = undefined))
     return starting
+  }
+
+  /** Follow Voice and @ultimate for the feed and pushes: while the connector exists and the harness is open. */
+  function follow() {
+    if (opened && connector) feed.start()
   }
 
   const pairingStatus = (state: PhoneState): PhoneStatus['pairing'] => {
@@ -153,9 +228,18 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
             ? instanceId(Buffer.from(state.machineSecret, 'base64url'), host.projectRoot)
             : '',
           devices: state ? devices(state) : [],
+          ...(state && { name: state.name }),
         }
-        if ('missing' in setup) return { state: 'unconfigured', error: setup.missing, ...base }
-        return { state: 'off', ...base }
+        const push = await pushStatus()
+        if ('missing' in setup)
+          return {
+            state: 'unconfigured',
+            error: setup.missing,
+            missing: setup.kind,
+            push,
+            ...base,
+          }
+        return { state: 'off', push, ...base }
       }
       const state = await loadState(path)
       const shown = pairingStatus(state)
@@ -164,7 +248,9 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
         ...(connector.error && { error: connector.error }),
         relay,
         instance: instance!,
+        name: state.name,
         devices: devices(state),
+        push: await pushStatus(),
         ...(shown && { pairing: shown }),
       }
     } catch (error) {
@@ -198,9 +284,22 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps = {}) {
   return {
     services,
     status,
-    start: ensure,
+    /** The harness opened: connect if configured and follow the transcript. */
+    start: async () => {
+      opened = true
+      await ensure()
+      follow()
+    },
+    /** The harness is going away (a core swap); `start` follows again when the next one opens. */
+    release() {
+      opened = false
+      feed.stop()
+    },
     stop() {
       stopped = true
+      opened = false
+      feed.stop()
+      apns?.client.close()
       pairing.cancel()
       connector?.stop()
       connector = undefined

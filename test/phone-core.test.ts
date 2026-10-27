@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { createPhone } from '../extensions/phone/runtime.ts'
+import { updateState } from '../extensions/phone/state.ts'
 import type { RelaySocket } from '../extensions/phone/connector.ts'
 import {
   b64u,
@@ -18,6 +19,7 @@ import {
 import type { KeyPair } from '../extensions/phone/crypto.ts'
 import type { PhoneState } from '../extensions/phone/state.ts'
 import { temp, until } from './helpers.ts'
+import { FakeSource, fakeVoice } from './phone-fakes.ts'
 
 type Out = {
   t: string
@@ -115,7 +117,7 @@ class FakePhone {
   }
 }
 
-async function fixture(configure = true) {
+async function fixture(configure = true, extraEnv: NodeJS.ProcessEnv = {}) {
   const userHome = await temp()
   const projectRoot = await temp('project-')
   const relay = fakeRelay()
@@ -133,14 +135,21 @@ async function fixture(configure = true) {
     { name: 'no root', current: false, home: '', conversations: [] },
   ]
   if (configure) await writeSecret(userHome, 'ULTIMATE_PHONE_RELAY_TOKEN', 'relay-secret')
+  const { voice, calls } = fakeVoice()
+  const source = new FakeSource()
   const phone = createPhone(
     { userHome, projectRoot, home: join(userHome, 'preview'), projects, notice: () => {} },
-    { env: configure ? { ULTIMATE_PHONE_RELAY: 'wss://relay.test' } : {}, connect: relay.connect },
+    {
+      voice,
+      source,
+      env: configure ? { ULTIMATE_PHONE_RELAY: 'wss://relay.test', ...extraEnv } : {},
+      connect: relay.connect,
+    },
   )
   await phone.start()
   const statePath = join(userHome, '.ultimate/phone.json')
   const state = async () => JSON.parse(await readFile(statePath, 'utf8')) as PhoneState
-  return { phone, relay, userHome, projectRoot, statePath, state }
+  return { phone, relay, userHome, projectRoot, statePath, state, calls, source }
 }
 
 it('stays inert without configuration and says what is missing', async () => {
@@ -155,12 +164,29 @@ it('says which secret is missing', async () => {
   const userHome = await temp()
   const phone = createPhone(
     { userHome, projectRoot: '/p', home: '/x', projects: async () => [], notice: () => {} },
-    { env: { ULTIMATE_PHONE_RELAY: 'wss://relay.test' } },
+    {
+      voice: fakeVoice().voice,
+      source: new FakeSource(),
+      env: { ULTIMATE_PHONE_RELAY: 'wss://relay.test' },
+    },
   )
   expect(await phone.status()).toMatchObject({
     state: 'unconfigured',
     error: expect.stringContaining('ULTIMATE_PHONE_RELAY_TOKEN'),
+    missing: 'token',
   })
+  const badRelay = createPhone(
+    { userHome, projectRoot: '/p', home: '/x', projects: async () => [], notice: () => {} },
+    { voice: fakeVoice().voice, source: new FakeSource(), env: { ULTIMATE_PHONE_RELAY: 'nope' } },
+  )
+  expect(await badRelay.status()).toMatchObject({ state: 'unconfigured', missing: 'relay' })
+})
+
+it('takes the relay token from the environment before the secret', async () => {
+  const { relay, phone } = await fixture(true, { ULTIMATE_PHONE_RELAY_TOKEN: 'env-token' })
+  await until(async () => (await phone.status()).state === 'online')
+  expect(relay.urls[0].headers).toEqual({ Authorization: 'Bearer env-token' })
+  phone.stop()
 })
 
 it('pairs a phone, serves it as a known device, and cuts it off when revoked', async () => {
@@ -259,6 +285,13 @@ it('pairs a phone, serves it as a known device, and cuts it off when revoked', a
     activities: { 42: 'cd34' },
   })
   expect((await phone.status()).devices).toMatchObject([{ id: iphone.device, push: true }])
+  expect((await phone.status()).name).toBe(initial.name)
+  // lastSeen is set when a known device handshakes, and not again within a minute.
+  await until(async () => (await state()).devices[0].lastSeen !== undefined)
+  const seen = (await state()).devices[0].lastSeen
+  expect(seen).toBeGreaterThan(Date.now() - 60000)
+  await again.call(5, 'ping')
+  expect((await state()).devices[0].lastSeen).toBe(seen)
 
   // A replayed frame and a skipped counter end the conn with 4400.
   const replay = again.frame({ id: 9, method: 'ping', params: {} }, 0)
@@ -300,6 +333,56 @@ it('answers "Pairing was declined" when the user denies', async () => {
   await until(() => iphone.drain().some((m) => m.id === 1))
   expect(iphone.messages[0].error).toEqual({ message: 'Pairing was declined' })
   expect((await state()).devices).toEqual([])
-  expect(relay.out.filter((m) => m.t === 'pairing').at(-1)).toMatchObject({ expires: 0 })
+  // The relay closes a pairing phone's socket when the code is withdrawn, so the answer goes first.
+  await until(() => relay.out.filter((m) => m.t === 'pairing').at(-1)?.expires === 0)
+  const answer = relay.out.findLastIndex((m) => m.t === 'data' && m.conn === 'c1')
+  const withdrawn = relay.out.findLastIndex((m) => m.t === 'pairing')
+  expect(answer).toBeLessThan(withdrawn)
+  phone.stop()
+})
+
+it('serves say and the feed to a paired phone, and stops the events when its conn goes', async () => {
+  const { phone, relay, state, statePath, calls, source } = await fixture()
+  await until(async () => (await phone.status()).state === 'online')
+  const mPub = Buffer.from((await state()).keys.public, 'base64url')
+  const P = generateKeyPair()
+  await updateState(statePath, (s) => {
+    s.devices.push({
+      id: deviceId(P.pub),
+      name: 'iPhone',
+      key: b64u(P.pub),
+      tokenHash: 'x',
+      addedAt: 1,
+    })
+  })
+  for (const text of ['one', 'two', 'three']) source.add('voice.heard', { text }, Date.now())
+  const iphone = new FakePhone(relay, 'c1', P)
+  expect(await iphone.connect(mPub)).toBe(true)
+
+  expect((await iphone.call(1, 'say', { id: 'u1', text: 'hello', via: 'voice' })).result).toEqual(
+    {},
+  )
+  await iphone.call(2, 'say', { id: 'u1', text: 'hello', via: 'voice' })
+  expect(calls.open).toHaveLength(1)
+  expect(calls.heard).toEqual([
+    ['hello', 'u1'],
+    ['hello', 'u1'],
+  ])
+  expect((await iphone.call(3, 'say', { id: 'u2', text: 'x' })).error).toEqual({
+    message: 'via must be "voice" or "text"',
+  })
+
+  const snapshot = (await iphone.call(4, 'feed.subscribe', { limit: 2 })).result.items
+  expect(snapshot.map((item: { text: string }) => item.text)).toEqual(['two', 'three'])
+  source.add('voice.heard', { text: 'four' }, Date.now())
+  await until(() => iphone.drain().some((m) => m.event === 'feed'))
+  expect(iphone.messages.find((m) => m.event === 'feed')).toMatchObject({
+    data: { items: [{ kind: 'heard', text: 'four' }] },
+  })
+  const events = () => iphone.drain().filter((m) => m.event === 'feed').length
+  relay.toMac({ t: 'close', conn: 'c1' })
+  source.add('voice.heard', { text: 'five' }, Date.now())
+  await phone.status()
+  expect(events()).toBe(1)
   phone.stop()
 })

@@ -20,6 +20,8 @@ export type PhoneDevice = {
   push?: { token: string; env: 'sandbox' | 'production' }
   /** Live Activity push tokens by job id. */
   activities?: Record<string, string>
+  /** `<instance>:<job>` of the alerts already sent to this phone, newest last and bounded. */
+  alerted?: string[]
 }
 export type PhoneState = {
   /** Names the relay's Durable Object. */

@@ -109,7 +109,10 @@ export class Pairing {
     this.#pending = undefined
     clearTimeout(this.#timer)
     if (!pending) return
-    this.#hooks.publish(tokenHash(pending.token), 0)
-    pending.waiting?.reject(reason ?? new Error('Pairing expired'))
+    const withdraw = () => this.#hooks.publish(tokenHash(pending.token), 0)
+    if (!pending.waiting) return withdraw()
+    pending.waiting.reject(reason ?? new Error('Pairing expired'))
+    // The relay closes a pairing phone's socket (4401) when the token goes; its error answer must reach it first.
+    setImmediate(withdraw)
   }
 }

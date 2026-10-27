@@ -6,8 +6,14 @@ export type PhoneStatus = {
   state: 'off' | 'unconfigured' | 'connecting' | 'online' | 'error'
   error?: string
   relay?: string
+  /** The Mac's name as the phone shows it, once the state file exists. */
+  name?: string
+  /** With `unconfigured`: the setting that is missing or invalid, `relay` (`phone.relay`) or `token` (`ULTIMATE_PHONE_RELAY_TOKEN`). */
+  missing?: 'relay' | 'token'
   /** This project's instance id on the relay. */
   instance: string
+  /** Whether this Mac can send the phone notifications: `error` says what is missing. */
+  push?: { configured: true } | { configured: false; error: string }
   devices: { id: string; name: string; addedAt: number; lastSeen?: number; push: boolean }[]
   /** The code this instance is showing, and the phone waiting for the user to allow it. */
   pairing?: { qr: string; expires: number; request?: { device: string; name: string } }

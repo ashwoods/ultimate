@@ -15,6 +15,8 @@ import type { Call, Services } from './methods.ts'
 import { macKeys } from './state.ts'
 
 const MAX_FRAME = 1024 * 1024
+/** A device's `lastSeen` moves at most this often. */
+const SEEN_EVERY = 60 * 1000
 /** Close codes of the protocol. */
 export const PROTOCOL_ERROR = 4400
 export const UNAUTHORIZED = 4401
@@ -110,8 +112,9 @@ export class Channel {
     if (hello.t !== 'hello' || hello.v !== 1 || !key || !eph) return this.close(PROTOCOL_ERROR)
     const id = deviceId(key)
     const state = await this.#services.state()
-    if (!state.devices.some((device) => device.id === id) && !this.#services.pairing.pending)
-      return this.close(UNAUTHORIZED)
+    const known = state.devices.find((device) => device.id === id)
+    if (!known && !this.#services.pairing.pending) return this.close(UNAUTHORIZED)
+    if (known) this.#seen(id, known.lastSeen)
     const ephemeral = generateKeyPair()
     this.#session = macSession(macKeys(state), ephemeral, key, eph)
     this.#device = { id, key }
@@ -126,12 +129,27 @@ export class Channel {
     )
   }
 
+  /** Note that the phone was here, unless it was noted less than a minute ago. */
+  #seen(id: string, last = 0) {
+    const now = Date.now()
+    if (now - last < SEEN_EVERY) return
+    this.#services
+      .update((state) => {
+        const known = state.devices.find((device) => device.id === id)
+        if (known && now - (known.lastSeen ?? 0) >= SEEN_EVERY) known.lastSeen = now
+      })
+      .catch(() => {
+        // A failed write only leaves the time as it was; the call itself goes on.
+      })
+  }
+
   async #call(id: number, method: string, params: Record<string, unknown>) {
     const device = this.#device!
     try {
       // Re-read the file: a phone revoked from another instance stops here, and only `pair` may come before pairing.
-      const known = (await this.#services.state()).devices.some((entry) => entry.id === device.id)
+      const known = (await this.#services.state()).devices.find((entry) => entry.id === device.id)
       if (!known && method !== 'pair') return this.close(UNAUTHORIZED)
+      if (known) this.#seen(device.id, known.lastSeen)
       const handler = methods[method]
       if (!handler) throw new RpcError(`Unknown method ${method}`)
       const result = await handler(params, {
