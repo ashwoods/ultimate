@@ -24,6 +24,7 @@ import type { VoiceAnswer, VoiceContext, VoiceHeard, VoiceLine, VoiceSession } f
 import { VoiceLiveApi } from './api.ts'
 import type { VoiceLiveService } from './api.ts'
 import { voiceBrief } from './brief.ts'
+import { Activity, watchActivity } from './activity.ts'
 
 const SECRET = 'OPENAI_API_KEY'
 const NO_KEY = `Live voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
@@ -67,6 +68,7 @@ const Forwarded = defineDoc<{ scheduled: boolean }>({
   initial: () => ({ scheduled: false }),
 })
 export const userActions = ['status', 'start', 'heard', 'log', 'end']
+export const docs = [Activity]
 const terminal = {
   status: 'terminal',
   outcome: { status: 'completed', result: null },
@@ -179,7 +181,7 @@ function placeBriefLater(
   briefs.set(id, placing)
 }
 
-/** Display-only writes need no model message and never launch a turn. */
+/** Display-only writes need no model message and never launch a turn. Every line carries when it was written. */
 async function write(
   host: ExtensionHost,
   id: ConversationId,
@@ -189,7 +191,10 @@ async function write(
 ) {
   const conversation = (await host.harness().conversation(id, context))!
   const settled = await (
-    await conversation.submit({ type: 'write', requestId, entry: { kind, data } }, context)
+    await conversation.submit(
+      { type: 'write', requestId, entry: { kind, data: { at: Date.now(), ...data } } },
+      context,
+    )
   ).wait(context)
   if (settled.status !== 'done') throw new Error(`Voice write failed: ${settled.reason}`)
   return settled.entry
@@ -487,7 +492,7 @@ async function hear(host: ExtensionHost, data: VoiceHeard, intro: string, reques
       type: 'input',
       ...(requestId ? { requestId } : {}),
       whenBusy: 'steer',
-      entry: { kind: 'voice.heard', data },
+      entry: { kind: 'voice.heard', data: { ...data, at: Date.now() } },
       content: `${intro}\n${data.text}`,
     },
     context,
@@ -640,6 +645,15 @@ export default (host: ExtensionHost) => {
   host.need(LineageApi)
   host.need(ConversationsApi)
   host.implement(VoiceLiveApi, phone(host))
+  let unwatch: (() => void) | undefined
+  host.onOpen(async () => {
+    unwatch?.()
+    unwatch = watchActivity(host)
+  })
+  host.onClose(async () => {
+    unwatch?.()
+    unwatch = undefined
+  })
   return defineExtension({
     name: 'voice-live',
     tasks: [answerTask(host)],
@@ -689,11 +703,15 @@ export default (host: ExtensionHost) => {
           // Locate the input this tool round saw, not a later queued/steering input. No model-supplied correlation id.
           const task = await api.getTask(api.taskId, ctx)
           const input = task?.input as ToolTaskInput
-          const re =
-            (await api.memo('re', ctx)) ??
-            (await api.memo(
-              're',
-              await api.commit(async (tx) => {
+          // What this line answers: @ultimate's answer to a forwarded line (`re`), or the user's line, where a codemode
+          // call since makes it Voice's own lookup.
+          type Said = { re?: number; lookup?: true }
+          const { re, lookup } =
+            (await api.memo<Said>('said', ctx)) ??
+            (await api.memo<Said>(
+              'said',
+              await api.commit(async (tx): Promise<Said> => {
+                let looked = false
                 let cursor: Cursor | undefined
                 do {
                   const page = await tx.scanEntries(
@@ -706,12 +724,17 @@ export default (host: ExtensionHost) => {
                     cursor,
                   )
                   for (const entry of page.items) {
-                    if (entry.kind === 'voice.answer') return (entry.data as { re: number }).re
-                    if (entry.kind === 'voice.heard') return false
+                    if (entry.kind === 'voice.answer') return { re: (entry.data as VoiceAnswer).re }
+                    if (entry.kind === 'voice.heard') return looked ? { lookup: true } : {}
+                    looked ||= (entry.model ?? []).some(
+                      (m) =>
+                        m.role === 'assistant' &&
+                        m.content.some((p) => p.type === 'toolCall' && p.name === 'codemode'),
+                    )
                   }
                   cursor = page.next
                 } while (cursor)
-                return false
+                return {}
               }, ctx),
               ctx,
             ))
@@ -724,7 +747,8 @@ export default (host: ExtensionHost) => {
               text,
               speech: true,
               ...(summary ? { summary } : {}),
-              ...(typeof re === 'number' ? { re } : {}),
+              ...(re !== undefined ? { re } : {}),
+              ...(lookup ? { lookup } : {}),
             },
             `voice:say:${api.taskId}`,
           )

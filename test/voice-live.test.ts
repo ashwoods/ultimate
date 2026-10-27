@@ -11,6 +11,7 @@ import { Standing } from '../extensions/subagents/api.ts'
 import { Summaries, setAutomaticSummaries } from '../extensions/conversations/summary.ts'
 import { liveInstructions } from '../extensions/voice-live/server.ts'
 import type { VoiceAnswer, VoiceLine } from '../extensions/voice-live/refs.ts'
+import { Activity } from '../extensions/voice-live/activity.ts'
 import { writeSecret } from '../extensions/secrets/store.ts'
 import { fauxServer, held, post, sourceCopy, temp, until } from './helpers.ts'
 
@@ -284,7 +285,12 @@ it('leaves a notice for a forwarded line whose answer task is aborted', async ()
   const lines = (await f.entries(f.voice)).filter((e) => e.kind === 'voice.line')
   const forwarded = lines.find((e) => (e.data as VoiceLine).forwarded)!
   expect(lines.filter((e) => (e.data as VoiceLine).role === 'notice').map((e) => e.data)).toEqual([
-    { role: 'notice', text: 'Ultimate was stopped before it answered.', re: forwarded.id },
+    {
+      role: 'notice',
+      text: 'Ultimate was stopped before it answered.',
+      re: forwarded.id,
+      at: expect.any(Number),
+    },
   ])
   expect(f.answers[0]).toContain('Ultimate did not answer that request.')
 })
@@ -307,16 +313,21 @@ it('answers a connection check itself in the standing Voice conversation, with i
   await (await f.server.harness.conversation(f.voice, context))!.waitForIdle(context)
   const lines = (await f.entries(f.voice)).filter((e) => e.kind === 'voice.line')
   expect(lines.map((e) => e.data)).toEqual([
-    { role: 'ultimate', text: 'Yes, I can hear you.', speech: true },
+    { role: 'ultimate', text: 'Yes, I can hear you.', speech: true, at: expect.any(Number) },
   ])
   expect((await f.entries(f.voice)).find((e) => e.kind === 'voice.heard')?.data).toEqual({
     text: 'can you hear me',
+    at: expect.any(Number),
   })
   expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.utterance')).toHaveLength(0)
+  // The inline setting is off by default: nothing is copied into @ultimate's conversation.
+  expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.echo')).toHaveLength(0)
 })
 
 it('forwards the cleaned request and feeds the actual answer back to Voice to speak, linked to its forwarded line', async () => {
   const f = await fixture()
+  // With the inline setting on, @ultimate's conversation also shows Voice's lines, as display-only copies.
+  await post(f.server, '/api/ui', { set: { 'voice-live.inline': true } })
   await f.action('heard', { text: 'Um please, can you check the tests for me' })
   const spoken = await f.waitAnswer(1)
   const forwarded = (await f.entries(f.voice)).find(
@@ -345,7 +356,37 @@ it('forwards the cleaned request and feeds the actual answer back to Voice to sp
     text: 'The spoken answer. Details are on screen.',
     speech: true,
     re: forwarded.id,
+    at: expect.any(Number),
   })
+  // The session counts the user's line and both spoken ones, and the request passed on and answered.
+  await until(
+    async () => (await f.server.harness.snapshot(Activity, f.voice, context))?.messages === 3,
+  )
+  expect(await f.server.harness.snapshot(Activity, f.voice, context)).toMatchObject({
+    messages: 3,
+    relayed: 1,
+    waiting: 0,
+    via: 'browser',
+  })
+  await until(
+    async () => (await f.entries(f.main)).filter((e) => e.kind === 'voice.echo').length === 3,
+  )
+  const echoes = (await f.entries(f.main)).filter((e) => e.kind === 'voice.echo')
+  expect(echoes.map((e) => [e.data, e.model])).toEqual([
+    [
+      expect.objectContaining({ role: 'user', text: 'Um please, can you check the tests for me' }),
+      undefined,
+    ],
+    [expect.objectContaining({ role: 'voice', text: 'Passing that on.' }), undefined],
+    [
+      expect.objectContaining({
+        role: 'voice',
+        text: 'The spoken answer. Details are on screen.',
+        relayed: true,
+      }),
+      undefined,
+    ],
+  ])
   await f.action('end', { seconds: 23 })
   expect((await f.entries(f.voice)).at(-1)?.data).toMatchObject({ phase: 'ended', seconds: 23 })
 })
@@ -494,11 +535,21 @@ export default { name: 'phone' }
     { phase: 'started', at: expect.any(Number), via: 'phone' },
   ])
   const heard = entries.filter((e) => e.kind === 'voice.heard')
-  expect(heard.map((e) => e.data)).toEqual([{ text: 'hello', via: 'phone' }])
+  expect(heard.map((e) => e.data)).toEqual([
+    { text: 'hello', via: 'phone', at: expect.any(Number) },
+  ])
   const brief = entries.find((e) => e.kind === 'voice.context')!
   expect(brief.id).toBeLessThan(heard[0].id)
   expect(JSON.stringify(heard[0].model)).toContain('on their phone')
   expect(entries.filter((e) => e.kind === 'voice.line').map((e) => e.data)).toEqual([
-    { role: 'ultimate', text: 'Hello there, good to hear you.', speech: true, summary: 'Greeted.' },
+    {
+      role: 'ultimate',
+      text: 'Hello there, good to hear you.',
+      speech: true,
+      summary: 'Greeted.',
+      at: expect.any(Number),
+    },
   ])
+  await until(async () => (await server.harness.snapshot(Activity, voice, context))?.messages === 2)
+  expect((await server.harness.snapshot(Activity, voice, context))?.via).toBe('phone')
 })
