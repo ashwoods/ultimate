@@ -69,10 +69,25 @@ GPT-Live, with no OpenAI key:
 `voice_say` takes an optional `summary` (at most 140 characters): one plain line for a lock-screen notification,
 stored on the `voice.line` data. Voice sets it whenever it speaks @ultimate's answer on a phone line.
 
+## The relay agent and its session
+
+The relay is the standing agent `voice` unless the user's `voiceLive.agent` setting names another: an extension can
+ship its own agent built on this one (`extends: voice`, and `formerly: [voice]` so it takes over the standing
+conversation and its history; see `docs/subagents.md`). The server publishes the name on the root conversation's
+`voice-live.relay` document for the browser and reinstalls on settings changes.
+
+Every `voice.heard` and `voice.line` carries `at`, when it was written. A line Voice speaks after a `codemode` lookup in
+the same turn carries `lookup: true` and shows "answered by Voice": it answered without asking @ultimate. The
+`voice-live.activity` document on the relay's conversation is its current session, recomputed whenever the transcript
+changes: since the first line after 30 quiet minutes (phone reconnects do not split it), the user's and Voice's spoken
+lines (`messages`), requests passed to @ultimate (`relayed`) and those still unanswered (`waiting`), and whether the
+newest line came by phone or browser. `ui.tsx` exports it with `RelayDoc` and the `OwnRow` point: an extension that
+provides `true` there shows the relay in the sidebar itself, and voice-live leaves out its row under @ultimate.
+
 ## Browser and transcript
 
-`Standing.voice` is the only Voice conversation index. Its `Unlisted` provider removes it from other sidebar lists;
-the Voice row nests under @ultimate. The dock under the transcript says what is happening now in large words: connecting,
+`Standing[relay name]` is the only Voice conversation index. Its `Unlisted` provider removes it from other sidebar
+lists; the Voice row nests under @ultimate unless an `OwnRow` provider takes it. The dock under the transcript says what is happening now in large words: connecting,
 listening, hearing the user, Voice deciding, @ultimate on a request (its phase and time), an answer ready, speaking.
 Each forwarded request is one @ultimate message card (`Bubble` from messages): what was asked, then working (the
 sidebar's phase and elapsed time), then the spoken answer, unfolding to @ultimate's full answer (`voice.answer`, whose

@@ -71,21 +71,8 @@ export type VoiceActivity = {
 /** The Voice conversation's current session, recomputed whenever its transcript changes. */
 export const ActivityDoc = docRef<VoiceActivity>('voice-live.activity')
 
-/**
- * A Voice line shown in @ultimate's conversation while the `voice-live.inline` UI state is on (`INLINE_KEY`): display only, no
- * model content, never a turn. `role`: the user's words, Voice's spoken line or a notice; `source` is the line in Voice.
- */
-export type VoiceEcho = {
-  role: 'user' | 'voice' | 'notice'
-  text: string
-  at?: number
-  via?: 'phone'
-  /** Voice answered from its own lookup. */
-  lookup?: true
-  /** Voice spoke @ultimate's answer to a forwarded request. */
-  relayed?: true
-  source: { conversation: number; entry: number }
-}
+/** On the root conversation: the relay agent's name, `voice` unless the user's `voiceLive.agent` setting names another. */
+export const RelayDoc = docRef<{ name?: string }>('voice-live.relay')
 
 /** No arguments → API key availability, or a reason explaining how to enable it. */
 export const StatusAction = actionRef<null, VoiceStatus>('voice-live', 'status')

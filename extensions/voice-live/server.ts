@@ -25,6 +25,7 @@ import { VoiceLiveApi } from './api.ts'
 import type { VoiceLiveService } from './api.ts'
 import { voiceBrief } from './brief.ts'
 import { Activity, watchActivity } from './activity.ts'
+import { publishRelayName, Relay, relayId, relayName } from './agent.ts'
 
 const SECRET = 'OPENAI_API_KEY'
 const NO_KEY = `Live voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
@@ -68,16 +69,18 @@ const Forwarded = defineDoc<{ scheduled: boolean }>({
   initial: () => ({ scheduled: false }),
 })
 export const userActions = ['status', 'start', 'heard', 'log', 'end']
-export const docs = [Activity]
+export const docs = [Activity, Relay]
+/** The relay agent's name comes from the settings; the browser learns it from the `Relay` document. */
+export const reloadOnSettings = true
 const terminal = {
   status: 'terminal',
   outcome: { status: 'completed', result: null },
 } as const
 
 async function voiceId(host: ExtensionHost) {
-  const standing = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context)
-  if (!standing?.voice) throw new Error('Start live voice first')
-  return standing.voice
+  const id = await relayId(host)
+  if (!id) throw new Error('Start live voice first')
+  return id
 }
 
 async function lines(tx: Tx, id: ConversationId, limit: number) {
@@ -508,7 +511,7 @@ const PHONE_INTRO = {
 /** What other extensions use to drive Voice from a phone: no OpenAI key, no GPT-Live. */
 export const phone = (host: ExtensionHost): VoiceLiveService => ({
   async open(session) {
-    const id = await host.need(SubagentsApi).standing('voice', context)
+    const id = await host.need(SubagentsApi).standing(await relayName(host), context)
     await write(
       host,
       id,
@@ -524,9 +527,7 @@ export const phone = (host: ExtensionHost): VoiceLiveService => ({
     if (!text.trim()) throw new Error('Expected text')
     return hear(host, { text: text.trim(), via: 'phone' }, PHONE_INTRO[typed], `voice:heard:${id}`)
   },
-  async conversation() {
-    return (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.voice
-  },
+  conversation: () => relayId(host),
 })
 
 export const actions = {
@@ -540,7 +541,7 @@ export const actions = {
     if (typeof sdp !== 'string' || !sdp.trim()) throw new Error('Expected an SDP offer')
     const key = await apiKey(host, signal)
     if (!key) throw new Error(NO_KEY)
-    const id = await host.need(SubagentsApi).standing('voice', context)
+    const id = await host.need(SubagentsApi).standing(await relayName(host), context)
     // Put together while the session connects; a failure becomes a brief that says so, never a failed start.
     const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
     const brief = makeBrief(host, main)
@@ -649,6 +650,7 @@ export default (host: ExtensionHost) => {
   host.onOpen(async () => {
     unwatch?.()
     unwatch = watchActivity(host)
+    await publishRelayName(host)
   })
   host.onClose(async () => {
     unwatch?.()
@@ -663,7 +665,8 @@ export default (host: ExtensionHost) => {
         // the entry lands after this request's cutoff, so this request gets the same message appended.
         beforeRequest: async (request, api, ctx) => {
           if (
-            (await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.voice !== api.conversationId
+            (await api.snapshot(Standing, ROOT_CONVERSATION_ID, ctx))?.[await relayName(host)] !==
+            api.conversationId
           )
             return undefined
           const id = api.conversationId

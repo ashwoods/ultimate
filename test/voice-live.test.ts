@@ -320,14 +320,10 @@ it('answers a connection check itself in the standing Voice conversation, with i
     at: expect.any(Number),
   })
   expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.utterance')).toHaveLength(0)
-  // The inline setting is off by default: nothing is copied into @ultimate's conversation.
-  expect((await f.entries(f.main)).filter((e) => e.kind === 'voice.echo')).toHaveLength(0)
 })
 
 it('forwards the cleaned request and feeds the actual answer back to Voice to speak, linked to its forwarded line', async () => {
   const f = await fixture()
-  // With the inline setting on, @ultimate's conversation also shows Voice's lines, as display-only copies.
-  await post(f.server, '/api/ui', { set: { 'voice-live.inline': true } })
   await f.action('heard', { text: 'Um please, can you check the tests for me' })
   const spoken = await f.waitAnswer(1)
   const forwarded = (await f.entries(f.voice)).find(
@@ -368,25 +364,6 @@ it('forwards the cleaned request and feeds the actual answer back to Voice to sp
     waiting: 0,
     via: 'browser',
   })
-  await until(
-    async () => (await f.entries(f.main)).filter((e) => e.kind === 'voice.echo').length === 3,
-  )
-  const echoes = (await f.entries(f.main)).filter((e) => e.kind === 'voice.echo')
-  expect(echoes.map((e) => [e.data, e.model])).toEqual([
-    [
-      expect.objectContaining({ role: 'user', text: 'Um please, can you check the tests for me' }),
-      undefined,
-    ],
-    [expect.objectContaining({ role: 'voice', text: 'Passing that on.' }), undefined],
-    [
-      expect.objectContaining({
-        role: 'voice',
-        text: 'The spoken answer. Details are on screen.',
-        relayed: true,
-      }),
-      undefined,
-    ],
-  ])
   await f.action('end', { seconds: 23 })
   expect((await f.entries(f.voice)).at(-1)?.data).toMatchObject({ phase: 'ended', seconds: 23 })
 })

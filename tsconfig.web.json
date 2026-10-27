@@ -25,7 +25,6 @@
     "shared/extension-api.ts",
     "extensions/*/refs.ts",
     "extensions/phone/code.ts",
-    "extensions/voice-live/inline.ts",
     "extensions/messages/caller.ts",
     "extensions/cloud/types.ts",
     "extensions/conversations/types.ts",

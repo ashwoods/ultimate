@@ -1,22 +1,12 @@
-/**
- * What the sidebar and @ultimate's conversation show of Voice: the current session's counts, recomputed from Voice's
- * transcript whenever it changes, and each line copied into @ultimate while the inline setting is on.
- */
+/** The relay's current session, for a sidebar: its counts, recomputed from its transcript whenever that changes. */
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
-import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, Cursor, EntryRecord, Tx } from '@earendil-works/pi-durable'
+import { defineDoc } from '@earendil-works/pi-durable'
+import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing } from '../subagents/api.ts'
+import { relayId } from './agent.ts'
 import { ActivityDoc } from './refs.ts'
-import { INLINE_KEY } from './inline.ts'
-import type {
-  VoiceActivity,
-  VoiceAnswer,
-  VoiceEcho,
-  VoiceHeard,
-  VoiceLine,
-  VoiceSession,
-} from './refs.ts'
+import type { VoiceActivity, VoiceAnswer, VoiceHeard, VoiceLine, VoiceSession } from './refs.ts'
 
 /** Quiet this long, the next line starts a new session. */
 export const SESSION_GAP = 30 * 60_000
@@ -71,87 +61,40 @@ export async function activityOf(tx: Tx, id: ConversationId): Promise<VoiceActiv
   return activity
 }
 
-/** The copy of a Voice line @ultimate's conversation shows, or undefined for lines it leaves out. */
-export function echoOf(entry: EntryRecord): VoiceEcho | undefined {
-  const source = { conversation: entry.conversationId, entry: entry.id }
-  if (entry.kind === 'voice.heard') {
-    const heard = entry.data as VoiceHeard
-    return {
-      role: 'user',
-      text: heard.text,
-      source,
-      ...(heard.at ? { at: heard.at } : {}),
-      ...(heard.via ? { via: heard.via } : {}),
-    }
-  }
-  if (entry.kind !== 'voice.line') return undefined
-  const line = entry.data as VoiceLine
-  // Forwarded lines already reach @ultimate as its input; notes and GPT-Live's backchannels are not part of the talk.
-  if (line.role !== 'ultimate' && line.role !== 'notice') return undefined
-  return {
-    role: line.role === 'ultimate' ? 'voice' : 'notice',
-    text: line.text,
-    source,
-    ...(line.at ? { at: line.at } : {}),
-    ...(line.lookup ? { lookup: true as const } : {}),
-    ...(line.re !== undefined ? { relayed: true as const } : {}),
-  }
-}
-
-/**
- * Keep Voice's activity document current and copy its new lines into @ultimate while the inline setting is on. Each
- * copy's request id names its line, so a line is copied once. Returns the unsubscribe.
- */
+/** Keep the relay's activity document current as its transcript changes. Returns the unsubscribe. */
 export function watchActivity(host: ExtensionHost) {
   let chain: Promise<unknown> = Promise.resolve()
-  let ids: Record<string, ConversationId> | undefined
+  let voice: ConversationId | undefined
   const load = async () => {
-    ids = await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context)
+    voice = await relayId(host)
   }
   const refresh = (id: ConversationId) =>
     host.harness().commit(async (tx) => {
       Object.assign(await tx.doc(Activity, id), await activityOf(tx, id))
     }, context)
-  const echo = async (entry: EntryRecord, main: ConversationId) => {
-    const data = echoOf(entry)
-    if (!data || (await host.uiState(context))[INLINE_KEY] !== true) return
-    await (
-      await host.harness().conversation(main, context)
-    )?.submit(
-      {
-        type: 'write',
-        requestId: `voice:echo:${entry.id}`,
-        entry: { kind: 'voice.echo', data },
-      },
-      context,
-    )
-  }
   const run = (work: () => Promise<unknown>) => {
     chain = chain.then(work).catch((error: unknown) => console.error('Voice activity:', error))
   }
   run(async () => {
     await load()
-    if (ids?.voice !== undefined) await refresh(ids.voice)
+    if (voice !== undefined) await refresh(voice)
   })
   return host.harness().subscribeCommits((publication) => {
     // Voice's conversation may be created in this very commit: then its entries are told apart after the reload.
     const reload = publication.changes.some(
       (change) => change.type === 'document' && change.record.kind === Standing.definition.kind,
     )
-    const entries = publication.changes.flatMap((change) =>
-      change.type === 'entry' && (reload || change.value.conversationId === ids?.voice)
-        ? [change.value]
-        : [],
+    const conversations = new Set(
+      publication.changes.flatMap((change) =>
+        change.type === 'entry' && (reload || change.value.conversationId === voice)
+          ? [change.value.conversationId]
+          : [],
+      ),
     )
-    if (entries.length === 0) return
+    if (conversations.size === 0) return
     run(async () => {
       if (reload) await load()
-      const voice = ids?.voice
-      const mine = entries.filter((entry) => entry.conversationId === voice)
-      if (voice === undefined || mine.length === 0) return
-      await refresh(voice)
-      const main = ids?.ultimate
-      if (main !== undefined) for (const entry of mine) await echo(entry, main)
+      if (voice !== undefined && conversations.has(voice)) await refresh(voice)
     })
   })
 }

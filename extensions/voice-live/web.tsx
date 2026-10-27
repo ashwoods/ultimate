@@ -1,12 +1,9 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
-  ArrowRightIcon,
   AudioLinesIcon,
   BookOpenIcon,
   ChevronRightIcon,
   CircleAlertIcon,
-  EyeIcon,
-  EyeOffIcon,
   LoaderCircleIcon,
   MicIcon,
   MicOffIcon,
@@ -21,7 +18,6 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import type { ReactNode } from 'react'
 import { Message, MessageContent, MessageResponse } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
-import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { Kbd } from '@/components/ui/kbd'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
@@ -30,9 +26,9 @@ import {
   ConversationScope,
   defineWebExtension,
   events,
-  formatAgo,
   formatKeys,
   formatTime,
+  AllProvided,
   provide,
   Provided,
   useAction,
@@ -42,42 +38,33 @@ import {
   useEvent,
   useNow,
   useTranscript,
-  useUiState,
   useUltimate,
   useViewport,
   UserText,
   UserView,
 } from '@/sdk'
 import type { EntryRenderer, UltimateActions } from '@/sdk'
-import { uiState } from '@/sdk/client'
-import { AgentMark, AgentTiles, ConversationPhase, useOverview } from '../conversations/ui.tsx'
+import { AgentMark, agentTitle, ConversationPhase } from '../conversations/ui.tsx'
 import { Body, Bubble } from '../messages/ui.tsx'
 import { SideChatsDoc, useSideChatFront } from '../side-chat/ui.tsx'
-import { BelowUltimate, StandingRow, Unlisted } from '../sidebar/ui.tsx'
+import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
 import { openAgentSource, StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import * as live from './live.tsx'
 import type { VoiceMode } from './live.tsx'
-import { INLINE_KEY } from './inline.ts'
-import { xanaTile } from './mark.tsx'
-import { ActivityDoc, StatusAction } from './refs.ts'
-import type {
-  VoiceAnswer,
-  VoiceContext,
-  VoiceEcho,
-  VoiceLine,
-  VoiceSession,
-  VoiceUtterance,
-} from './refs.ts'
+import { RelayDoc, StatusAction } from './refs.ts'
+import { OwnRow } from './ui.tsx'
+import type { VoiceAnswer, VoiceContext, VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
 
 const KEYS = 'alt+v'
-/** The relay's agent name and how the UI names it. */
-const NAME = 'voice'
-const TITLE = 'Voice'
 const useMode = () => useSyncExternalStore(live.subscribe, live.voiceMode)
+/** The relay agent's name: `voice` unless the user's settings name another. */
+const useName = () => useDocOf(1, RelayDoc)?.name ?? 'voice'
+
 /** @ultimate's conversation and the Voice conversation, once start created it. */
 function useIds() {
+  const name = useName()
   const main = useDocOf(1, StandingDoc)?.ultimate
-  const voice = useDocOf(1, StandingDoc)?.voice
+  const voice = useDocOf(1, StandingDoc)?.[name]
   return { main, voice }
 }
 
@@ -908,39 +895,31 @@ function VoiceDock({ core }: { core: ReactNode }) {
   )
 }
 
-// ---- sidebar: the relay's own block ------------------------------------------------------------------------------
+// ---- sidebar: Voice under @ultimate ------------------------------------------------------------------------------
 
-/** A phone line counts as on while its last line is this recent; phone sessions have no end of their own. */
-const PHONE_ON = 5 * 60_000
-
-/** The relay's block under @ultimate's, once its conversation exists. */
-function useRelayBlock(main: number | undefined): ReactNode {
+/** Voice's row under @ultimate, unless an extension shows the relay's row itself (`OwnRow`). */
+function useVoiceRow(main: number | undefined): ReactNode {
   const { voice } = useIds()
   if (main === undefined || voice === undefined) return null
-  return <RelayBlock main={main} voice={voice} />
+  return (
+    <AllProvided input={voice} point={OwnRow} key="voice">
+      {(own) => (own.some(Boolean) ? null : <VoiceRow main={main} voice={voice} />)}
+    </AllProvided>
+  )
 }
 
-/**
- * The relay's standing row: its mark and wordmark, what it is doing now (the browser session's state, on the phone,
- * thinking, or passing a request to @ultimate with @ultimate's phase), then the session on a quiet line: lines
- * exchanged, how many went to @ultimate, and idle time. A click brings it to the front while a browser session runs,
- * else opens its conversation. Its menu holds the setting that shows its lines in @ultimate's conversation.
- */
-function RelayBlock({ main, voice }: { main: number; voice: number }) {
+/** Voice's row under @ultimate: its state; a click toggles it in front while on, or opens it to start. */
+function VoiceRow({ main, voice }: { main: number; voice: number }) {
   const mode = useMode()
   const actions = useUltimate()
-  const activity = useDocOf(voice, ActivityDoc)
-  const thinking = useOverview()[voice]?.runState === 'working'
-  const mainBusy = useConversations().find((conversation) => conversation.id === main)?.busy
-  const now = useNow(15_000)
-  const [inline, setInline] = useUiState(INLINE_KEY, false)
+  const name = useName()
   const on = mode.phase !== 'off'
-  const relaying = (activity?.waiting ?? 0) > 0
-  const phone =
-    activity?.via === 'phone' && activity.at !== undefined && now - activity.at < PHONE_ON
+  const inFront = on && mode.front && actions.conversationId === main
+  const current = inFront || actions.conversationId === voice
   const hot = mode.phase === 'live' && !mode.muted
-  const word = on
-    ? mode.phase === 'live'
+  const word = !on
+    ? 'off'
+    : mode.phase === 'live'
       ? mode.muted
         ? 'muted'
         : 'live'
@@ -951,83 +930,45 @@ function RelayBlock({ main, voice }: { main: number; voice: number }) {
         : mode.phase === 'starting'
           ? 'connecting'
           : 'ending'
-    : thinking
-      ? 'thinking'
-      : phone
-        ? 'on phone'
-        : 'idle'
-  const busy = thinking || relaying || hot
-  const inFront = on && mode.front && actions.conversationId === main
-  const shown = inFront || (actions.surface === 'agent' && actions.conversationId === voice)
-  const session = activity?.since !== undefined
   return (
-    <div data-voice-live-row={voice}>
-      <StandingRow
-        conversation={{ id: voice, busy: thinking }}
-        menu={
-          <DropdownMenuItem className="text-[12.5px]" onSelect={() => setInline(!inline)}>
-            {inline ? <EyeOffIcon /> : <EyeIcon />}
-            {inline ? 'Hide in @ultimate' : 'Show in @ultimate'}
-          </DropdownMenuItem>
-        }
-        name="voice"
-        onOpen={() => (on ? toggleFront(actions) : actions.switchConversation(voice))}
-        presence={busy ? 'working' : mode.waiting ? 'waiting' : 'idle'}
-        shown={shown}
-      >
-        <span
-          className={cn(
-            'flex shrink-0 items-center gap-1',
-            hot ? 'text-error' : thinking || mode.waiting ? 'text-brand' : undefined,
-          )}
-        >
-          {hot && <span className="size-1.5 rounded-full bg-error motion-safe:animate-pulse" />}
-          {word}
-        </span>
-        {relaying && (
-          <span className="flex min-w-0 items-center gap-1 text-brand">
-            <ArrowRightIcon className="size-2.5 shrink-0" />
-            <Provided input={mainBusy ? main : undefined} point={ConversationPhase}>
-              {(phase) => <span className="truncate">@ultimate {phase?.word ?? 'working'}</span>}
-            </Provided>
-          </span>
+    <button
+      aria-current={current ? 'true' : undefined}
+      className={cn(
+        'mx-2 flex w-[calc(100%-1rem)] cursor-pointer items-center gap-1.5 rounded-md py-1.5 pr-2 pl-9 text-left outline-none hover:bg-sidebar-accent/50 focus-visible:ring-1 focus-visible:ring-ring',
+        current && 'bg-sidebar-accent',
+      )}
+      data-voice-live-row={voice}
+      onClick={() => {
+        if (!on) return actions.switchConversation(voice)
+        toggleFront(actions)
+      }}
+      title={
+        on
+          ? `${mode.front ? 'Send Voice back' : 'Bring Voice to the front'} · ${keyHint}`
+          : 'Open Voice'
+      }
+      type="button"
+    >
+      <AudioLinesIcon
+        className={cn('size-3 shrink-0', on ? 'text-brand' : 'text-muted-foreground')}
+      />
+      <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
+        {agentTitle(name)}
+      </span>
+      <span
+        className={cn(
+          'flex shrink-0 items-center gap-1 font-mono text-[10px]',
+          hot ? 'text-error' : mode.waiting ? 'text-brand' : 'text-muted-foreground',
         )}
-      </StandingRow>
-      <div
-        className="flex min-w-0 items-center gap-1.5 pr-4 pb-1 pl-[50px] font-mono text-[10px] leading-4 text-muted-foreground/80"
-        data-voice-live-session
       >
-        {session ? (
-          <>
-            <span className="shrink-0">
-              {activity.messages} message{activity.messages === 1 ? '' : 's'}
-            </span>
-            <span aria-hidden>·</span>
-            <span
-              className="flex shrink-0 items-center gap-0.5"
-              title={`${activity.relayed} passed on to @ultimate`}
-            >
-              {activity.relayed}
-              <ArrowRightIcon className="size-2.5" />
-              @ultimate
-            </span>
-            {!busy && activity.at !== undefined && (
-              <span className="ml-auto shrink-0" title={new Date(activity.at).toLocaleString()}>
-                idle {formatAgo(activity.at, now)}
-              </span>
-            )}
-          </>
-        ) : (
-          <span className="flex items-center gap-1">
-            relays to <ArrowRightIcon className="size-2.5" /> @ultimate
-          </span>
-        )}
-      </div>
-    </div>
+        {hot && <span className="size-1.5 rounded-full bg-error motion-safe:animate-pulse" />}
+        {word}
+      </span>
+    </button>
   )
 }
 
-/** The relay's conversation has its own block, never a row in the sidebar's sections. */
+/** The Voice conversation nests under @ultimate, never in the sidebar's own sections. */
 function useVoiceIds(): ReadonlySet<number> {
   const { voice } = useIds()
   return useMemo(() => new Set(voice === undefined ? [] : [voice]), [voice])
@@ -1365,92 +1306,18 @@ function ContextRow({ entry }: { entry: EntryRecord }) {
   )
 }
 
-/** Under a line the relay answered from its own lookup: it did not ask @ultimate. */
+/** Under a line the relay answered from its own read-only lookup: it did not ask @ultimate. */
 function LookupMark() {
+  const name = useName()
   return (
     <span
       className="mt-0.5 flex items-center gap-1 font-mono text-[10.5px] text-muted-foreground/70"
+      data-voice-lookup
       title="Looked up without asking @ultimate"
     >
-      <AgentMark name={NAME} size="xs" />
-      answered by {TITLE}
+      <AgentMark name={name} size="xs" />
+      answered by {agentTitle(name)}
     </span>
-  )
-}
-
-/**
- * In @ultimate, while its setting is on: a line of the relay's talk with the user, copied over. Consecutive lines read
- * as one quiet card on the relay's colour rail, headed by its mark, where the line came from and when; the header
- * opens the relay's conversation at the line.
- */
-function EchoRow({ entry }: { entry: EntryRecord }) {
-  const [inline] = useUiState(INLINE_KEY, false)
-  const transcript = useTranscript()
-  const actions = useUltimate()
-  if (!inline) return null
-  const echo = entry.data as unknown as VoiceEcho
-  const index = transcript.findIndex((e) => e.id === entry.id)
-  const first = transcript[index - 1]?.kind !== 'voice.echo'
-  const last = transcript[index + 1]?.kind !== 'voice.echo'
-  return (
-    <div
-      className={cn(
-        'border-l-2 border-cyan-600/40 bg-cyan-500/[0.04] pr-3 pl-3 dark:border-cyan-300/30',
-        first ? 'mt-3 rounded-tr-md pt-2' : 'pt-1',
-        last ? 'mb-3 rounded-br-md pb-2' : 'pb-1',
-      )}
-      data-voice-echo={echo.role}
-    >
-      {first && (
-        <button
-          className="mb-1 flex cursor-pointer items-center gap-1.5 font-mono text-[10.5px] text-muted-foreground hover:text-foreground"
-          onClick={() =>
-            openAgentSource(actions.switchConversation, echo.source, {
-              conversation: entry.conversationId,
-              entry: entry.id,
-            })
-          }
-          title={`Open ${TITLE}'s conversation at this line`}
-          type="button"
-        >
-          <AgentMark name={NAME} size="xs" />
-          <span className={cn('font-semibold tracking-[0.2em]', xanaTile.wordmark)}>
-            {TITLE.toUpperCase()}
-          </span>
-          {echo.via === 'phone' && <span>· on phone</span>}
-          {echo.at !== undefined && <span>· {formatTime(echo.at)}</span>}
-          <span className="flex items-center gap-0.5">
-            · relays to <ArrowRightIcon className="size-2.5" /> @ultimate
-          </span>
-        </button>
-      )}
-      <div className="flex min-w-0 gap-2 text-[12.5px] leading-relaxed">
-        <span className="w-9 shrink-0 pt-px font-mono text-[10.5px] text-muted-foreground/70">
-          {echo.role === 'user' ? 'you' : echo.role === 'notice' ? '' : NAME}
-        </span>
-        <div className="min-w-0 flex-1">
-          <p
-            className={cn(
-              'break-words',
-              echo.role === 'user'
-                ? 'text-foreground/85'
-                : echo.role === 'notice'
-                  ? 'font-mono text-[11.5px] text-warning'
-                  : 'text-muted-foreground',
-            )}
-          >
-            {echo.text}
-          </p>
-          {echo.lookup && <LookupMark />}
-          {echo.relayed && (
-            <span className="mt-0.5 flex items-center gap-1 font-mono text-[10.5px] text-muted-foreground/70">
-              <Volume2Icon className="size-2.5" />
-              spoke @ultimate's answer
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
   )
 }
 
@@ -1561,11 +1428,7 @@ export default defineWebExtension({
     overlay: [Relay],
   },
   composer: VoiceDock,
-  provides: [
-    provide(BelowUltimate, useRelayBlock),
-    provide(Unlisted, useVoiceIds),
-    provide(AgentTiles, (name: string) => (name === NAME ? xanaTile : undefined)),
-  ],
+  provides: [provide(UnderUltimate, useVoiceRow), provide(Unlisted, useVoiceIds)],
   tools: {
     voice_say: () => null,
     voice_ask_ultimate: () => null,
@@ -1579,7 +1442,6 @@ export default defineWebExtension({
     'voice.session': SessionRow,
     'voice.context': ContextRow,
     'voice.utterance': UtteranceRow,
-    'voice.echo': EchoRow,
   },
   commands: [
     {
@@ -1600,11 +1462,6 @@ export default defineWebExtension({
       title: 'Voice relay: mute or unmute',
       when: () => live.voiceMode().phase === 'live',
       run: () => live.setMuted(!live.voiceMode().muted),
-    },
-    {
-      id: 'voice-live.inline',
-      title: `${TITLE}: show or hide its lines in @ultimate`,
-      run: () => uiState.set(INLINE_KEY, uiState.get(INLINE_KEY) !== true),
     },
     {
       id: 'voice-live.end',
