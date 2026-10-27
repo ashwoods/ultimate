@@ -52,13 +52,21 @@ import { openAgentSource } from '../subagents/ui.tsx'
 import * as live from './live.tsx'
 import type { VoiceMode } from './live.tsx'
 import { StatusAction } from './refs.ts'
-import { OwnRow, toggleFront, useRelayIds, useRelayName, useVoiceMode } from './ui.tsx'
+import {
+  OwnRow,
+  toggleFront,
+  useRelayIds,
+  useRelayName,
+  useRelayTitle,
+  useVoiceMode,
+} from './ui.tsx'
 import type { VoiceAnswer, VoiceContext, VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
 
 const KEYS = 'alt+v'
 const useMode = useVoiceMode
 const useName = useRelayName
 const useIds = useRelayIds
+const useTitle = useRelayTitle
 const start = live.start
 
 const clock = (ms: number) => {
@@ -128,6 +136,7 @@ function StartButton() {
   const mode = useMode()
   const actions = useUltimate()
   const status = useAction(StatusAction)
+  const title = useTitle()
   useEvent('secrets:changed', () => void status.refetch())
   useEffect(() => {
     if (status.data) live.rememberStatus(status.data)
@@ -139,8 +148,8 @@ function StartButton() {
     ? 'Voice relay needs an OpenAI API key: tap to add it'
     : on
       ? mode.front
-        ? 'Voice relay is on · send Voice back'
-        : 'Voice relay is on · bring Voice to the front'
+        ? `Voice relay is on · send ${title} back`
+        : `Voice relay is on · bring ${title} to the front`
       : 'Start voice relay: talk to @ultimate, hear its answers'
   return (
     <Tooltip>
@@ -190,6 +199,7 @@ function LiveIndicator() {
   const phone = useViewport() === 'phone'
   const now = useNow(1000, mode.phase === 'live')
   const { main } = useIds()
+  const title = useTitle()
   if (mode.phase === 'off' && !mode.problem) return null
   // On @ultimate's conversation, Voice's own card (collapsed or expanded) already says all this: one indicator only.
   if (mode.phase !== 'off' && actions.surface === 'agent' && actions.conversationId === main)
@@ -219,7 +229,7 @@ function LiveIndicator() {
   const label = stateLabel(mode)
   return (
     <span
-      aria-label="Voice relay"
+      aria-label={`${title} relay`}
       className={cn(
         'flex h-6 items-center gap-0.5 rounded-full border pr-0.5 pl-1 text-foreground max-md:h-8',
         hot ? 'border-error/40 bg-error/10' : 'border-border bg-muted/40',
@@ -230,10 +240,10 @@ function LiveIndicator() {
     >
       {/* The state is the way to Voice: a tap brings it forward or sends it back. */}
       <button
-        aria-label={`${label} · ${mode.front ? 'send Voice back' : 'bring Voice to the front'}`}
+        aria-label={`${label} · ${mode.front ? `send ${title} back` : `bring ${title} to the front`}`}
         className="flex h-full min-w-0 cursor-pointer items-center gap-1.5 rounded-full px-1.5 outline-none hover:bg-accent/60 focus-visible:ring-1 focus-visible:ring-ring"
         onClick={() => toggleFront(actions)}
-        title={`${mode.front ? 'Send Voice back' : 'Bring Voice to the front'} · ${keyHint}`}
+        title={`${mode.front ? `Send ${title} back` : `Bring ${title} to the front`} · ${keyHint}`}
         type="button"
       >
         {mode.phase === 'starting' || mode.phase === 'ending' ? (
@@ -363,6 +373,7 @@ const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 function Stage() {
   const id = useConversation((conversation) => conversation.id)
   const { main, voice } = useIds()
+  const relay = useTitle()
   const mode = useMode()
   const [sideFront, setSideFront] = useSideChatFront()
   const sides = useDocOf(main, SideChatsDoc)?.sides
@@ -447,12 +458,12 @@ function Stage() {
           type="button"
         >
           <span className="size-1.5 rounded-full bg-brand motion-safe:animate-pulse" />
-          Voice keeps listening · <span className="text-foreground">show @ultimate</span>
+          {relay} keeps listening · <span className="text-foreground">show @ultimate</span>
         </button>
       )}
       {shown && (
         <section
-          aria-label="Voice"
+          aria-label={relay}
           className={cn(
             'absolute flex flex-col overflow-hidden border border-border bg-background shadow-2xl shadow-black/40',
             inFront && 'pointer-events-auto',
@@ -474,7 +485,7 @@ function Stage() {
           <ConversationScope id={voice}>
             <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border/60 px-3">
               <AudioLinesIcon className="size-3.5 text-brand" />
-              <span className="text-[13px] font-semibold">Voice</span>
+              <span className="text-[13px] font-semibold">{relay}</span>
               <span className="truncate font-mono text-[11px] text-muted-foreground">
                 relay to @ultimate
               </span>
@@ -483,7 +494,7 @@ function Stage() {
                   <Kbd>{keyHint}</Kbd> back
                 </span>
                 <button
-                  aria-label="Collapse Voice; it keeps listening"
+                  aria-label={`Collapse ${relay}; it keeps listening`}
                   className="flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[12px] text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
                   onClick={() => live.setFront(false)}
                   title={`Collapse · keeps listening · ${keyHint}`}
@@ -509,6 +520,7 @@ function Stage() {
 function Collapsed({ phone }: { phone: boolean }) {
   const mode = useMode()
   const step = useStep(mode)
+  const relay = useTitle()
   const asleep = mode.phase === 'paused'
   return (
     <div
@@ -522,10 +534,10 @@ function Collapsed({ phone }: { phone: boolean }) {
       data-voice-live-collapsed={step.step}
     >
       <button
-        aria-label={`Voice: ${step.step} · expand`}
+        aria-label={`${relay}: ${step.step} · expand`}
         className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-xl p-1 text-left outline-none hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring"
         onClick={() => live.setFront(true)}
-        title={`Expand Voice · ${keyHint}`}
+        title={`Expand ${relay} · ${keyHint}`}
         type="button"
       >
         <StepMark mode={mode} size="small" step={step} />
@@ -573,6 +585,7 @@ function Collapsed({ phone }: { phone: boolean }) {
 
 /** The collapsed card's two lines: the step, then the words being heard or what it is about. */
 function StepLine({ step, mode }: { step: Step; mode: VoiceMode }) {
+  const relay = useTitle()
   const title =
     step.step === 'hearing'
       ? 'Hearing you…'
@@ -600,7 +613,7 @@ function StepLine({ step, mode }: { step: Step; mode: VoiceMode }) {
       ? mode.partial
       : step.step === 'working'
         ? step.request
-        : 'Voice · tap to expand'
+        : `${relay} · tap to expand`
   return (
     <>
       <span className="block truncate text-[13px] leading-tight font-semibold">{title}</span>
@@ -689,15 +702,16 @@ function StepText({ step, mode }: { step: Step; mode: VoiceMode }) {
   const { main } = useIds()
   const busy = useConversations().find((conversation) => conversation.id === main)?.busy
   const now = useNow(1000, step.step === 'working' || mode.phase === 'live')
+  const relay = useTitle()
   const session =
     mode.phase === 'live' && mode.since !== undefined ? clock(now - mode.since) : undefined
   const [title, detail]: [ReactNode, ReactNode] =
     step.step === 'off'
-      ? ['Voice is off', 'Start it to talk to @ultimate']
+      ? [`${relay} is off`, 'Start it to talk to @ultimate']
       : step.step === 'connecting'
         ? ['Connecting…', 'Opening the microphone and the voice session']
         : step.step === 'loading'
-          ? ['Loading context…', 'Voice reads what @ultimate is up to · talk any time']
+          ? ['Loading context…', `${relay} reads what @ultimate is up to · talk any time`]
           : step.step === 'ending'
             ? ['Ending…', 'Closing the session']
             : step.step === 'paused'
@@ -709,7 +723,7 @@ function StepText({ step, mode }: { step: Step; mode: VoiceMode }) {
                   : step.step === 'speaking'
                     ? ['Speaking', 'Interrupt any time']
                     : step.step === 'deciding'
-                      ? ['Thinking it over', 'Voice decides whether this goes to @ultimate']
+                      ? ['Thinking it over', `${relay} decides whether this goes to @ultimate`]
                       : step.step === 'answer'
                         ? ['Answer ready', 'Putting it into words']
                         : step.step === 'working'
@@ -895,7 +909,7 @@ function useVoiceRow(main: number | undefined): ReactNode {
 function VoiceRow({ main, voice }: { main: number; voice: number }) {
   const mode = useMode()
   const actions = useUltimate()
-  const name = useName()
+  const title = useTitle()
   const on = mode.phase !== 'off'
   const inFront = on && mode.front && actions.conversationId === main
   const current = inFront || actions.conversationId === voice
@@ -927,8 +941,8 @@ function VoiceRow({ main, voice }: { main: number; voice: number }) {
       }}
       title={
         on
-          ? `${mode.front ? 'Send Voice back' : 'Bring Voice to the front'} · ${keyHint}`
-          : 'Open Voice'
+          ? `${mode.front ? `Send ${title} back` : `Bring ${title} to the front`} · ${keyHint}`
+          : `Open ${title}`
       }
       type="button"
     >
@@ -936,7 +950,7 @@ function VoiceRow({ main, voice }: { main: number; voice: number }) {
         className={cn('size-3 shrink-0', on ? 'text-brand' : 'text-muted-foreground')}
       />
       <span className="min-w-0 flex-1 truncate font-mono text-[10.5px] text-foreground/80">
-        {agentTitle(name)}
+        {title}
       </span>
       <span
         className={cn(
@@ -1292,6 +1306,7 @@ function ContextRow({ entry }: { entry: EntryRecord }) {
 /** Under a line the relay answered from its own read-only lookup: it did not ask @ultimate. */
 function LookupMark() {
   const name = useName()
+  if (name === undefined) return null
   return (
     <span
       className="mt-0.5 flex items-center gap-1 font-mono text-[10.5px] text-muted-foreground/70"
@@ -1314,7 +1329,7 @@ function UtteranceRow({ entry }: { entry: EntryRecord }) {
     <div data-voice-utterance>
       <UserView entry={entry} message={message} text={data.text} />
       <VoiceMark className="-mt-3 justify-end">
-        by voice{name !== 'voice' && ` · via @${name}`}
+        by voice{name !== undefined && name !== 'voice' && ` · via @${name}`}
       </VoiceMark>
     </div>
   )

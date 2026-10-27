@@ -372,7 +372,7 @@ export function answerTask(host: ExtensionHost) {
                   kind: 'voice.utterance',
                   data: { text: input.text, line },
                 },
-                content: `The user, through their Voice agent (spoken or typed, may contain transcription mistakes):\n${input.text}`,
+                content: `The user, through their voice relay @${await relayName(host)} (spoken or typed, may contain transcription mistakes):\n${input.text}`,
               },
               ctx,
             )

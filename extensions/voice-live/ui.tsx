@@ -2,6 +2,7 @@
 import { useSyncExternalStore } from 'react'
 import { definePoint, useDocOf } from '@/sdk'
 import type { UltimateActions } from '@/sdk'
+import { agentTitle } from '../conversations/ui.tsx'
 import { StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
 import * as live from './live.tsx'
 import { RelayDoc } from './refs.ts'
@@ -19,14 +20,23 @@ export const OwnRow = definePoint<number, boolean>('voice-live.own-row')
 /** This page's voice session: off, starting, live, paused or ending, muted, in front, an answer waiting. */
 export const useVoiceMode = () => useSyncExternalStore(live.subscribe, live.voiceMode)
 
-/** The relay agent's name: `voice` unless the user's settings name another. */
-export const useRelayName = () => useDocOf(1, RelayDoc)?.name ?? 'voice'
+/**
+ * The relay agent's name: `voice`, or the resident agent that replaces it. Undefined until the server's document
+ * arrives, so nothing shows a name it is about to replace.
+ */
+export const useRelayName = () => useDocOf(1, RelayDoc)?.name
 
-/** @ultimate's conversation and the relay's, once it exists. */
+/** How the UI names the relay: `Xana` for `xana`, `Voice` for `voice`; empty until the name is known. */
+export function useRelayTitle() {
+  const name = useRelayName()
+  return name === undefined ? '' : agentTitle(name)
+}
+
+/** @ultimate's conversation and the relay's, once both are known. */
 export function useRelayIds() {
   const name = useRelayName()
   const standing = useDocOf(1, StandingDoc)
-  return { main: standing?.ultimate, voice: standing?.[name] }
+  return { main: standing?.ultimate, voice: name === undefined ? undefined : standing?.[name] }
 }
 
 /** The relay to the front over @ultimate, from anywhere, or back. */

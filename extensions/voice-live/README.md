@@ -63,7 +63,8 @@ GPT-Live, with no OpenAI key:
 - `heard(text, id, typed?)` submits a `voice.heard` input with `via: 'phone'` (request id `voice:heard:<id>`, admitted once)
   after the pending brief. Its model content says the user is on their phone (push-to-talk, on-device transcript,
   may contain mistakes, or typed) and that no live voice model is on the call, so Voice is the only voice.
-  Lines Voice forwards reach @ultimate worded neutrally, as coming through the user's Voice agent (spoken or typed).
+  Lines Voice forwards reach @ultimate worded neutrally, as coming through the user's voice relay by its `@name`
+  (spoken or typed). The browser names the relay by its title (`Voice`, or the agent that replaces it) everywhere.
 - `conversation()` returns the Voice conversation id if it exists.
 
 `voice_say` takes an optional `summary` (at most 140 characters): one plain line for a lock-screen notification,
