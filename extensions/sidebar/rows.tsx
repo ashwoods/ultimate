@@ -28,6 +28,7 @@ import {
   ConversationTask,
   FeatureTag,
   RenameAction,
+  WithAgentTile,
 } from '../conversations/ui.tsx'
 import type { Presence } from '../conversations/ui.tsx'
 import { Review } from '../workspaces/ui.tsx'
@@ -366,15 +367,18 @@ export function StandingRow({
   shown,
   presence,
   onOpen,
+  menu,
   children,
 }: {
   /** Missing until @ultimate's conversation is first opened. */
-  conversation?: ConversationSummary
+  conversation?: Pick<ConversationSummary, 'id' | 'busy'>
   /** The agent's name without `@`: `ultimate`, `lander`, `sync`, … */
   name: string
   shown: boolean
   presence: Presence
   onOpen: () => void
+  /** Menu items of the agent's own, above Compact context. */
+  menu?: ReactNode
   children: ReactNode
 }) {
   return (
@@ -395,16 +399,25 @@ export function StandingRow({
         <AgentMark name={name} presence={presence} />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex min-w-0 items-baseline gap-1.5">
-            {name === 'ultimate' ? (
-              // The title bar's wordmark: Ultimate's own name is the brand.
-              <span className="truncate font-sans text-[11.5px] leading-5 font-semibold tracking-[0.28em] text-brand">
-                ULTIMATE
-              </span>
-            ) : (
-              <span className="truncate text-[13px] leading-5 font-semibold text-foreground">
-                {agentTitle(name)}
-              </span>
-            )}
+            <WithAgentTile name={name}>
+              {(tile) =>
+                tile.wordmark ? (
+                  // A wordmark like the title bar's: Ultimate's own name is the brand.
+                  <span
+                    className={cn(
+                      'truncate font-sans text-[11.5px] leading-5 font-semibold tracking-[0.28em]',
+                      tile.wordmark,
+                    )}
+                  >
+                    {agentTitle(name).toUpperCase()}
+                  </span>
+                ) : (
+                  <span className="truncate text-[13px] leading-5 font-semibold text-foreground">
+                    {agentTitle(name)}
+                  </span>
+                )
+              }
+            </WithAgentTile>
             <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">@{name}</span>
           </span>
           <span className="flex w-full min-w-0 items-center gap-2 pr-5 font-mono text-[10px] leading-4 text-muted-foreground">
@@ -420,7 +433,8 @@ export function StandingRow({
           >
             <EllipsisIcon className="size-3.5" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-44 [&_[role=menuitem]]:cursor-pointer">
+          <DropdownMenuContent align="start" className="w-48 [&_[role=menuitem]]:cursor-pointer">
+            {menu}
             <CompactItem conversation={conversation} />
           </DropdownMenuContent>
         </DropdownMenu>
@@ -430,7 +444,7 @@ export function StandingRow({
 }
 
 /** Compacts a conversation's context: the gist stays, older turns leave it; the history stays stored. */
-function CompactItem({ conversation }: { conversation: ConversationSummary }) {
+function CompactItem({ conversation }: { conversation: Pick<ConversationSummary, 'id' | 'busy'> }) {
   return (
     <DropdownMenuItem
       className="text-[12.5px]"

@@ -51,7 +51,7 @@ import { LanderState } from './lander.tsx'
 import { StandingPhase, WaitingOnUser } from './ultimate.tsx'
 import { useSidebarState } from './state.tsx'
 import { topLevelRows } from './listed.ts'
-import { UnderUltimate, Unlisted } from './ui.tsx'
+import { BelowUltimate, UnderUltimate, Unlisted } from './ui.tsx'
 
 /** What the conversations below start in: the project's path from home, or `<project> #<worktree>`; the full path on hover. */
 function ProjectPath() {
@@ -525,6 +525,18 @@ function Tree({
             {(rows) => rows}
           </AllProvided>
         </div>
+        <AllProvided input={ultimateId} point={BelowUltimate}>
+          {(blocks) =>
+            blocks.map(
+              (block, index) =>
+                block && (
+                  <div className="mb-1 border-b border-border/60 pb-1" key={index}>
+                    {block}
+                  </div>
+                ),
+            )
+          }
+        </AllProvided>
         {agents.length > 0 && (
           <div
             aria-label="Agents"

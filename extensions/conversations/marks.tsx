@@ -1,6 +1,6 @@
 import { BotIcon, BrainIcon, GitMergeIcon, ScrollTextIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { cn } from '@/sdk'
+import { AllProvided, cn, definePoint } from '@/sdk'
 
 /** The display names of the agents Ultimate ships with; any other standing agent is its name, capitalised. */
 const names: Record<string, string> = {
@@ -10,12 +10,24 @@ const names: Record<string, string> = {
 export const agentTitle = (name: string) =>
   names[name] ?? name.charAt(0).toUpperCase() + name.slice(1)
 
-/** Each known agent's tile: its tint and glyph. Glyphs size to the tile through `size-[60%]`. */
-const tiles: Record<string, { tint: string; glyph: ReactNode }> = {
+/**
+ * An agent's tile: its tint and glyph, and optionally the text colour of a letter-spaced wordmark the sidebar shows
+ * instead of its name. Glyphs size to the tile through `size-[60%]`.
+ */
+export type AgentTile = { tint: string; glyph: ReactNode; wordmark?: string }
+/**
+ * The tile an extension gives the standing agent it brings, by agent name (`voice-live` gives its relay one); undefined
+ * for other names. Ultimate's own agents keep theirs.
+ */
+export const AgentTiles = definePoint<string, AgentTile | undefined>('conversations.agent-tile')
+
+/** Each known agent's tile. */
+const tiles: Record<string, AgentTile> = {
   ultimate: {
     tint: 'bg-brand/12 text-brand ring-brand/25',
     // The top bar's wordmark, reduced to its first letter.
     glyph: <span className="font-sans leading-none font-semibold">U</span>,
+    wordmark: 'text-brand',
   },
   lander: {
     tint: 'bg-success/10 text-success ring-success/25',
@@ -35,6 +47,23 @@ const fallback = {
   glyph: <BotIcon className="size-[60%]" strokeWidth={2} />,
 }
 
+/** Renders with `name`'s tile: Ultimate's own, else the one an extension gives it, else a bot. */
+export function WithAgentTile({
+  name,
+  children,
+}: {
+  name: string
+  children: (tile: AgentTile) => ReactNode
+}) {
+  const own = tiles[name]
+  if (own) return children(own)
+  return (
+    <AllProvided input={name} point={AgentTiles}>
+      {(found) => children(found.find((tile) => tile !== undefined) ?? fallback)}
+    </AllProvided>
+  )
+}
+
 /** The presence dot in a mark's corner: pulsing while it works, amber while it waits on you, else muted. */
 export type Presence = 'working' | 'waiting' | 'idle'
 
@@ -51,7 +80,24 @@ export function AgentMark({
   size?: 'xs' | 'sm' | 'md'
   presence?: Presence
 }) {
-  const tile = tiles[name] ?? fallback
+  return (
+    <WithAgentTile name={name}>
+      {(tile) => <Tile name={name} presence={presence} size={size} tile={tile} />}
+    </WithAgentTile>
+  )
+}
+
+function Tile({
+  name,
+  size,
+  presence,
+  tile,
+}: {
+  name: string
+  size: 'xs' | 'sm' | 'md'
+  presence?: Presence
+  tile: AgentTile
+}) {
   return (
     <span
       aria-hidden
