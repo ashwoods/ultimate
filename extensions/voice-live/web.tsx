@@ -1308,11 +1308,14 @@ function LookupMark() {
 function UtteranceRow({ entry }: { entry: EntryRecord }) {
   const data = entry.data as unknown as VoiceUtterance
   const message = entry.model?.[0]
+  const name = useName()
   if (message?.role !== 'user') return null
   return (
     <div data-voice-utterance>
       <UserView entry={entry} message={message} text={data.text} />
-      <VoiceMark className="-mt-3 justify-end">by voice</VoiceMark>
+      <VoiceMark className="-mt-3 justify-end">
+        by voice{name !== 'voice' && ` · via @${name}`}
+      </VoiceMark>
     </div>
   )
 }
