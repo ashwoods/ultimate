@@ -11,7 +11,7 @@ import type { Apns, ApnsConfig } from './apns.ts'
 import { UNAUTHORIZED } from './channel.ts'
 import { Connector } from './connector.ts'
 import type { Connect } from './connector.ts'
-import { instanceId, pairingQr, randomToken, tokenHash } from './crypto.ts'
+import { instanceId, randomToken, tokenHash } from './crypto.ts'
 import { createFeed } from './feed.ts'
 import type { FeedSource } from './feed.ts'
 import { Pairing } from './pairing.ts'
@@ -50,6 +50,7 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps) {
   let connector: Connector | undefined
   let instance: string | undefined
   let relay: string | undefined
+  let relayToken: string | undefined
   let starting: Promise<void> | undefined
   let stopped = false
   let opened = false
@@ -111,6 +112,7 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps) {
     fetch: deps.fetch ?? fetch,
     voice: deps.voice,
     feed,
+    log: (message) => host.notice(message),
   }
 
   /** The APNs sender and topic, or what is missing for push. */
@@ -170,12 +172,20 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps) {
   /** Connect when the configuration is complete and not yet connected. */
   function ensure() {
     starting ??= (async () => {
-      if (connector || stopped) return
+      if (stopped) return
       const setup = await configuration()
       if (!('token' in setup)) return
+      // Other settings change without touching the socket; a different relay or token is a different connection.
+      if (connector && (setup.relay !== relay || setup.token !== relayToken)) {
+        pairing.cancel()
+        connector.stop()
+        connector = undefined
+      }
+      if (connector) return
       const state = await loadState(path)
       instance = instanceId(Buffer.from(state.machineSecret, 'base64url'), host.projectRoot)
       relay = setup.relay
+      relayToken = setup.token
       connector = new Connector({
         ...setup,
         machine: state.machine,
@@ -202,15 +212,13 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps) {
     const pending = pairing.pending
     return (
       pending && {
-        qr: pairingQr({
-          v: 1,
-          relay: relay!,
-          machine: state.machine,
-          instance: instance!,
-          key: state.keys.public,
-          token: pending.token,
-          name: state.name,
-        }),
+        v: 1,
+        relay: relay!,
+        machine: state.machine,
+        instance: instance!,
+        key: state.keys.public,
+        token: pending.token,
+        name: state.name,
         expires: pending.expires,
         ...(pending.request && { request: pending.request }),
       }
@@ -246,6 +254,7 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps) {
       return {
         state: connector.state,
         ...(connector.error && { error: connector.error }),
+        ...(connector.replaced && { replaced: true }),
         relay,
         instance: instance!,
         name: state.name,
@@ -306,9 +315,7 @@ export function createPhone(host: PhoneHost, deps: PhoneDeps) {
     },
     async pairStart() {
       await online()
-      pairing.start()
-      const { qr, expires } = pairingStatus(await loadState(path))!
-      return { qr, expires }
+      return { expires: pairing.start().expires }
     },
     async pairCancel() {
       pairing.cancel()

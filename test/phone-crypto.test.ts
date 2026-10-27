@@ -9,13 +9,13 @@ import {
   macSession,
   open,
   parsePairingQr,
-  pairingQr,
   phoneSession,
   pushKey,
   seal,
   sealPush,
   tokenHash,
 } from '../extensions/phone/crypto.ts'
+import { pairingQr } from '../extensions/phone/code.ts'
 
 const vectors = JSON.parse(
   readFileSync(new URL('./fixtures/phone-vectors.json', import.meta.url), 'utf8'),

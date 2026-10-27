@@ -5,6 +5,7 @@ import { instanceId, randomToken } from './crypto.ts'
 import type { Feed } from './feed.ts'
 import { MAX_ITEMS } from './feed.ts'
 import type { Pairing } from './pairing.ts'
+import { activityKey } from './state.ts'
 import type { PhoneState } from './state.ts'
 
 /** What a method may use: the shared state file, this instance and the process around it. */
@@ -22,6 +23,8 @@ export type Services = {
   settings(): Promise<{ elevenlabs?: { voice?: string; model?: string } }>
   secret(name: string): Promise<string | undefined>
   fetch: typeof fetch
+  /** Tell the user's Mac side about a failure the phone only sees as a generic error. */
+  log(message: string): void
 }
 /** The phone making a call. */
 export type Call = {
@@ -158,8 +161,9 @@ export const methods: Record<string, Method> = {
       const known = state.devices.find((entry) => entry.id === device.id)
       if (!known) return
       const activities = (known.activities ??= {})
-      delete activities[job]
-      activities[job] = token
+      const key = activityKey(services.instance, job)
+      delete activities[key]
+      activities[key] = token
       for (const old of Object.keys(activities).slice(0, -MAX_ACTIVITIES)) delete activities[old]
     })
     return {}

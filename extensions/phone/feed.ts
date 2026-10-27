@@ -39,6 +39,8 @@ export type JobItem = Extract<FeedItem, { kind: 'job' }>
 /** The newest items kept, and the most a phone can ask for. */
 export const MAX_ITEMS = 200
 const PHASE_EVERY = 1000
+/** A job's `detail` is cut here: a snapshot of 200 items must fit the protocol's 1 MiB frame. */
+const MAX_DETAIL = 16 * 1024
 
 const TOOL_PHASES: Record<string, string> = {
   bash: 'Running a command',
@@ -106,7 +108,8 @@ export function buildItems(entries: readonly EntryRecord[]): FeedItem[] {
       const job = items.get(answer.re)
       if (job?.kind === 'job') {
         job.state = 'answered'
-        job.detail = answer.text
+        job.detail =
+          answer.text.length > MAX_DETAIL ? `${answer.text.slice(0, MAX_DETAIL)}…` : answer.text
       }
     }
   }

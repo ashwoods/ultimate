@@ -17,9 +17,17 @@ import {
   tokenHash,
 } from '../extensions/phone/crypto.ts'
 import type { KeyPair } from '../extensions/phone/crypto.ts'
+import { pairingQr } from '../extensions/phone/code.ts'
+import type { PhoneStatus } from '../extensions/phone/refs.ts'
 import type { PhoneState } from '../extensions/phone/state.ts'
 import { temp, until } from './helpers.ts'
 import { FakeSource, fakeVoice } from './phone-fakes.ts'
+
+/** The code a pairing shows, as the browser makes the QR text from it. */
+async function pairingCode(phone: { status(): Promise<PhoneStatus> }) {
+  const { expires: _expires, request: _request, ...code } = (await phone.status()).pairing!
+  return parsePairingQr(pairingQr(code))
+}
 
 type Out = {
   t: string
@@ -117,8 +125,9 @@ class FakePhone {
   }
 }
 
-async function fixture(configure = true, extraEnv: NodeJS.ProcessEnv = {}) {
-  const userHome = await temp()
+/** `userHome` shares the state file with another fixture, like two projects' processes. */
+async function fixture(configure = true, extraEnv: NodeJS.ProcessEnv = {}, sharedHome?: string) {
+  const userHome = sharedHome ?? (await temp())
   const projectRoot = await temp('project-')
   const relay = fakeRelay()
   const projects = async () => [
@@ -210,8 +219,8 @@ it('pairs a phone, serves it as a known device, and cuts it off when revoked', a
   expect(stranger.closed()?.code).toBe(4401)
 
   // pairStart: a code for this instance, announced to the relay.
-  const { qr, expires } = await phone.pairStart()
-  const code = parsePairingQr(qr)
+  const { expires } = await phone.pairStart()
+  const code = await pairingCode(phone)
   expect(code).toMatchObject({
     v: 1,
     relay: 'wss://relay.test',
@@ -228,11 +237,11 @@ it('pairs a phone, serves it as a known device, and cuts it off when revoked', a
   // pair waits for the user.
   const iphone = new FakePhone(relay, 'c1')
   expect(await iphone.connect(mPub)).toBe(true)
-  iphone.send({ id: 1, method: 'pair', params: { token: code.token, name: "Ash's iPhone" } })
+  iphone.send({ id: 1, method: 'pair', params: { token: code.token, name: "Sam's iPhone" } })
   await until(async () => (await phone.status()).pairing?.request !== undefined)
   expect((await phone.status()).pairing?.request).toEqual({
     device: iphone.device,
-    name: "Ash's iPhone",
+    name: "Sam's iPhone",
   })
   expect(iphone.drain()).toEqual([])
   await phone.pairAllow(iphone.device)
@@ -243,7 +252,7 @@ it('pairs a phone, serves it as a known device, and cuts it off when revoked', a
   // The device is stored, its token hash given to the relay, the pairing token withdrawn.
   const paired = await state()
   expect(paired.devices).toMatchObject([
-    { id: iphone.device, name: "Ash's iPhone", tokenHash: tokenHash(answer.deviceToken) },
+    { id: iphone.device, name: "Sam's iPhone", tokenHash: tokenHash(answer.deviceToken) },
   ])
   expect(relay.out.filter((m) => m.t === 'devices').at(-1)).toEqual({
     t: 'devices',
@@ -282,7 +291,7 @@ it('pairs a phone, serves it as a known device, and cuts it off when revoked', a
   expect((await again.call(4, 'activity.register', { job: 42, token: 'cd34' })).result).toEqual({})
   expect((await state()).devices[0]).toMatchObject({
     push: { token: 'ab12', env: 'sandbox' },
-    activities: { 42: 'cd34' },
+    activities: { [`${instance}:42`]: 'cd34' },
   })
   expect((await phone.status()).devices).toMatchObject([{ id: iphone.device, push: true }])
   expect((await phone.status()).name).toBe(initial.name)
@@ -320,13 +329,13 @@ it('answers "Pairing was declined" when the user denies', async () => {
   const { phone, relay, state } = await fixture()
   await until(async () => (await phone.status()).state === 'online')
   const mPub = Buffer.from((await state()).keys.public, 'base64url')
-  const { qr } = await phone.pairStart()
+  await phone.pairStart()
   const iphone = new FakePhone(relay, 'c1')
   await iphone.connect(mPub)
   iphone.send({
     id: 1,
     method: 'pair',
-    params: { token: parsePairingQr(qr).token, name: 'iPhone' },
+    params: { token: (await pairingCode(phone)).token, name: 'iPhone' },
   })
   await until(async () => (await phone.status()).pairing?.request !== undefined)
   await phone.pairDeny(iphone.device)
@@ -384,5 +393,96 @@ it('serves say and the feed to a paired phone, and stops the events when its con
   source.add('voice.heard', { text: 'five' }, Date.now())
   await phone.status()
   expect(events()).toBe(1)
+  phone.stop()
+})
+
+/** Adds a paired phone to the state file as pairing would. */
+async function addDevice(statePath: string, P: KeyPair) {
+  await updateState(statePath, (s) => {
+    s.devices.push({
+      id: deviceId(P.pub),
+      name: 'iPhone',
+      key: b64u(P.pub),
+      tokenHash: 'x',
+      addedAt: 1,
+    })
+  })
+}
+
+it("closes a phone's open feed when another project's process removes it", async () => {
+  const a = await fixture()
+  const b = await fixture(true, {}, a.userHome)
+  await until(async () => (await a.phone.status()).state === 'online')
+  await until(async () => (await b.phone.status()).state === 'online')
+  const mPub = Buffer.from((await a.state()).keys.public, 'base64url')
+  const P = generateKeyPair()
+  await addDevice(a.statePath, P)
+  const onB = new FakePhone(b.relay, 'c1', P)
+  expect(await onB.connect(mPub)).toBe(true)
+  await onB.call(1, 'feed.subscribe', { limit: 5 })
+  b.source.add('voice.heard', { text: 'one' }, Date.now())
+  await until(() => onB.drain().some((m) => m.event === 'feed'))
+  expect(onB.closed()).toBeUndefined()
+
+  await a.phone.revoke(deviceId(P.pub))
+  b.source.add('voice.heard', { text: 'two' }, Date.now())
+  await until(() => onB.closed() !== undefined)
+  expect(onB.closed()?.code).toBe(4401)
+  expect(onB.drain().filter((m) => m.event === 'feed')).toHaveLength(1)
+  a.phone.stop()
+  b.phone.stop()
+})
+
+it('closes an unknown phone that pairing admitted when it calls anything but pair', async () => {
+  const { phone, relay, state } = await fixture()
+  await until(async () => (await phone.status()).state === 'online')
+  const mPub = Buffer.from((await state()).keys.public, 'base64url')
+  await phone.pairStart()
+  const stranger = new FakePhone(relay, 'c1')
+  expect(await stranger.connect(mPub)).toBe(true)
+  stranger.send({ id: 1, method: 'feed.subscribe', params: {} })
+  await until(() => stranger.closed() !== undefined)
+  expect(stranger.closed()?.code).toBe(4401)
+  expect(stranger.drain()).toEqual([])
+  phone.stop()
+})
+
+it('keeps a feed snapshot inside the protocol frame by cutting details and dropping the oldest jobs', async () => {
+  const { phone, relay, state, statePath, source } = await fixture()
+  await until(async () => (await phone.status()).state === 'online')
+  const mPub = Buffer.from((await state()).keys.public, 'base64url')
+  const P = generateKeyPair()
+  await addDevice(statePath, P)
+  for (let i = 0; i < 100; i++) {
+    const line = source.add('voice.line', { role: 'user', text: `q${i}`, forwarded: true }, i + 1)
+    source.add('voice.answer', { text: 'x'.repeat(100_000), re: line })
+  }
+  const iphone = new FakePhone(relay, 'c1', P)
+  await iphone.connect(mPub)
+  const { result } = await iphone.call(1, 'feed.subscribe', { limit: 200 })
+  const items = result.items as { request: string; detail: string }[]
+  expect(items.length).toBeGreaterThan(10)
+  expect(items.length).toBeLessThan(100)
+  expect(items.at(-1)!.request).toBe('q99')
+  expect(items.at(-1)!.detail).toHaveLength(16 * 1024 + 1)
+  expect(items.at(-1)!.detail.endsWith('…')).toBe(true)
+  expect(Buffer.from(iphone.frames().at(-1)!.data!, 'base64').length).toBeLessThanOrEqual(
+    1024 * 1024,
+  )
+  phone.stop()
+})
+
+it('does not dispatch names inherited from Object as methods', async () => {
+  const { phone, relay, state, statePath } = await fixture()
+  await until(async () => (await phone.status()).state === 'online')
+  const mPub = Buffer.from((await state()).keys.public, 'base64url')
+  const P = generateKeyPair()
+  await addDevice(statePath, P)
+  const iphone = new FakePhone(relay, 'c1', P)
+  await iphone.connect(mPub)
+  expect((await iphone.call(1, 'constructor')).error).toEqual({
+    message: 'Unknown method constructor',
+  })
+  expect((await iphone.call(2, 'toString')).error).toEqual({ message: 'Unknown method toString' })
   phone.stop()
 })

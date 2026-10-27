@@ -5,7 +5,7 @@
 import { sealPush, pushKey } from './crypto.ts'
 import type { ApnsEnv, ApnsRequest, ApnsResult } from './apns.ts'
 import type { FeedItem, JobItem } from './feed.ts'
-import { macKeys } from './state.ts'
+import { activityKey, macKeys } from './state.ts'
 import type { PhoneDevice, PhoneState } from './state.ts'
 
 /** How long an answer waits for Voice's concluding speech before it is announced with its own first sentence. */
@@ -163,9 +163,10 @@ export class Pusher {
   /** Live Activity updates for a working job: when its phase changed, at most every `ACTIVITY_EVERY`. */
   #update(topic: string, devices: readonly PhoneDevice[], job: JobItem, send: Send) {
     const now = this.#deps.now()
+    const activity = activityKey(this.#deps.instance(), job.id)
     const sends: Promise<void>[] = []
     for (const device of devices) {
-      const token = device.activities?.[job.id]
+      const token = device.activities?.[activity]
       if (!token) continue
       const key = `${device.id}:${job.id}`
       const last = this.#sent.get(key)
@@ -180,7 +181,7 @@ export class Pusher {
         send(
           this.#activityRequest(topic, device, token, 'update', content, 5, job.id),
           (known) => {
-            if (known.activities?.[job.id] === token) delete known.activities[job.id]
+            if (known.activities?.[activity] === token) delete known.activities[activity]
           },
           device.id,
         ),
@@ -191,9 +192,10 @@ export class Pusher {
 
   /** The job is over: end its Live Activities with the summary, and forget their tokens. */
   #end(topic: string, devices: readonly PhoneDevice[], job: JobItem, send: Send) {
+    const activity = activityKey(this.#deps.instance(), job.id)
     const sends: Promise<void>[] = []
     for (const device of devices) {
-      const token = device.activities?.[job.id]
+      const token = device.activities?.[activity]
       if (!token) continue
       this.#sent.delete(`${device.id}:${job.id}`)
       const content = { state: job.state, since: job.at, summary: this.#summary(job) }
@@ -201,7 +203,7 @@ export class Pusher {
         send(
           this.#activityRequest(topic, device, token, 'end', content, 10, job.id),
           (known) => {
-            if (known.activities?.[job.id] === token) delete known.activities[job.id]
+            if (known.activities?.[activity] === token) delete known.activities[activity]
           },
           device.id,
         ),
@@ -210,7 +212,7 @@ export class Pusher {
     if (sends.length)
       sends.push(
         this.#deps.state.update((state) => {
-          for (const known of state.devices) delete known.activities?.[job.id]
+          for (const known of state.devices) delete known.activities?.[activity]
         }),
       )
     return sends

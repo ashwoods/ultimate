@@ -11,6 +11,7 @@ import {
   randomBytes,
 } from 'node:crypto'
 import type { KeyObject } from 'node:crypto'
+import type { PairingCode } from './refs.ts'
 
 const LABEL = 'ultimate-phone/1'
 
@@ -130,18 +131,7 @@ export const deviceId = (pPub: Uint8Array) =>
 /** Lowercase hex SHA-256 of a token's base64url text, which is all the relay keeps of it. */
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex')
 
-/** The JSON of a pairing QR code. */
-export type PairingCode = {
-  v: 1
-  relay: string
-  machine: string
-  instance: string
-  key: string
-  token: string
-  name: string
-}
-export const pairingQr = (pairing: PairingCode) =>
-  `ultimate-pair:${b64u(Buffer.from(JSON.stringify(pairing)))}`
+/** The code in a pairing QR text, `pairingQr`'s inverse. */
 export function parsePairingQr(text: string): PairingCode {
   if (!text.startsWith('ultimate-pair:')) throw new Error('Not an ultimate-pair code')
   return JSON.parse(Buffer.from(text.slice('ultimate-pair:'.length), 'base64url').toString())

@@ -185,7 +185,7 @@ it('alerts a failed job at once', async () => {
 })
 
 it('updates a Live Activity at most every 10 seconds, ends it with the summary and forgets its token', async () => {
-  const f = await fixture({ activities: { 5: 'la-token' } })
+  const f = await fixture({ activities: { 'inst1:5': 'la-token' } })
   const pusher = f.pusher()
   await pusher.observe([job(5, { phase: 'Thinking' })])
   expect(f.sent).toHaveLength(1)
@@ -222,7 +222,7 @@ it('updates a Live Activity at most every 10 seconds, ends it with the summary a
 })
 
 it('drops a push token APNs says is dead', async () => {
-  const f = await fixture({ activities: { 5: 'la-token' } })
+  const f = await fixture({ activities: { 'inst1:5': 'la-token' } })
   const pusher = f.pusher()
   f.reply.next = { status: 410, reason: 'Unregistered' }
   await pusher.observe([job(5)])

@@ -31,8 +31,7 @@ export const secrets = [
     url: 'https://developer.apple.com/account/resources/authkeys/list',
   },
 ]
-export const reloadOnSettings = true
-/** Pairing and forgetting phones are the user's decisions; an agent only learns the status. */
+/** All user-only: pairing and forgetting phones are the user's decisions, and the status carries the pairing code. */
 export const userActions = ['status', 'pairStart', 'pairCancel', 'pairAllow', 'pairDeny', 'revoke']
 
 const phones = new WeakMap<ExtensionHost, ReturnType<typeof createPhone>>()

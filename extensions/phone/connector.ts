@@ -43,6 +43,8 @@ export class Connector {
   #stopped = true
   state: ConnectorState = 'connecting'
   error?: string
+  /** Another process took the relay socket: this connector does not reconnect. */
+  replaced = false
 
   constructor(options: ConnectorOptions) {
     this.#options = options
@@ -114,6 +116,7 @@ export class Connector {
         this.error = 'Another process of this project took over the relay connection'
         return
       }
+      this.replaced = true
       this.#fail(this.error ?? (event.reason || `The relay closed the connection (${event.code})`))
     })
   }

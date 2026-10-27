@@ -34,6 +34,7 @@ import {
   RevokeAction,
   StatusAction,
 } from './refs.ts'
+import { pairingQr, verificationCode } from './code.ts'
 import type { PhoneStatus } from './refs.ts'
 
 type Device = PhoneStatus['devices'][number]
@@ -316,10 +317,12 @@ function Code({ pairing, phone }: { pairing: NonNullable<PhoneStatus['pairing']>
   const { busy, error, run } = useRun()
   const { copied, copy } = useCopy()
   const left = pairing.expires - now
+  const { expires: _expires, request: _request, ...code } = pairing
+  const text = pairingQr(code)
   return (
     <>
       <div className="mt-3">
-        <QrCode text={pairing.qr} />
+        <QrCode text={text} />
       </div>
       <p className="mt-3 text-[12.5px] leading-snug text-foreground">
         Scan this with the Ultimate app on your iPhone.
@@ -340,7 +343,7 @@ function Code({ pairing, phone }: { pairing: NonNullable<PhoneStatus['pairing']>
         </Button>
         <Button
           className={cn(small, 'text-muted-foreground')}
-          onClick={() => copy(pairing.qr)}
+          onClick={() => copy(text)}
           size="sm"
           title="Copy the code as text, for a phone without a camera"
           variant="ghost"
@@ -398,6 +401,13 @@ function Request({
           </p>
         </div>
       </div>
+      <p className="mt-2.5 text-[12px] leading-snug text-foreground/90">
+        Code{' '}
+        <span className="font-mono text-[13px] text-foreground">
+          {verificationCode(request.device)}
+        </span>
+        : the phone shows the same one.
+      </p>
       <p className="mt-2.5 text-[12px] leading-snug text-foreground/90">
         Allowing it lets this phone talk to every project running in Ultimate on this Mac, from
         anywhere, until you remove it.
@@ -519,11 +529,20 @@ function Details({ phone }: { phone: Phone }) {
               {status.error}
             </p>
           )}
-          <p className="mt-1.5 text-[12px] leading-snug text-muted-foreground">
-            Ultimate keeps retrying the relay
-            {status?.relay && <span className="font-mono"> {relayHost(status.relay)}</span>}.
-          </p>
-          <CheckAgain phone={phone} />
+          {status?.replaced ? (
+            <p className="mt-1.5 text-[12px] leading-snug text-muted-foreground">
+              This one stays offline so the two do not keep taking the connection from each other.
+              Restart this project's Ultimate to use it here again.
+            </p>
+          ) : (
+            <>
+              <p className="mt-1.5 text-[12px] leading-snug text-muted-foreground">
+                Ultimate keeps retrying the relay
+                {status?.relay && <span className="font-mono"> {relayHost(status.relay)}</span>}.
+              </p>
+              <CheckAgain phone={phone} />
+            </>
+          )}
         </Problem>
       )}
       {status && linked && pairing?.request && (

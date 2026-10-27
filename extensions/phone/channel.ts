@@ -15,6 +15,8 @@ import type { Call, Services } from './methods.ts'
 import { macKeys } from './state.ts'
 
 const MAX_FRAME = 1024 * 1024
+/** A sealed frame is its plaintext plus an 8-byte counter and a 16-byte tag. */
+const MAX_PLAINTEXT = MAX_FRAME - 24
 /** A device's `lastSeen` moves at most this often. */
 const SEEN_EVERY = 60 * 1000
 /** Close codes of the protocol. */
@@ -28,6 +30,7 @@ export class Channel {
   #services: Services
   #transport: Transport
   #queue: Promise<void> = Promise.resolve()
+  #outbox: Promise<void> = Promise.resolve()
   #session?: Session
   #device?: Call['device']
   #sent = 1n
@@ -63,16 +66,50 @@ export class Channel {
   dispose() {
     this.#closed.abort()
   }
-  /** Send an unsolicited `{ event, data }` message. */
+  /**
+   * Send an unsolicited `{ event, data }` message, in order. A phone removed from the state file by another process
+   * is closed here (4401) instead of receiving it.
+   */
   emit(event: string, data: unknown) {
-    this.#send({ event, data })
+    this.#outbox = this.#outbox
+      .then(async () => {
+        if (this.closed) return
+        if (!(await this.#known())) return this.close(UNAUTHORIZED)
+        this.#send({ event, data })
+      })
+      .catch(() => {
+        // The state file could not be read; this event is lost, and the next call or event checks again.
+      })
   }
 
-  #send(message: object) {
+  /** Whether the phone is in the state file now (an unreadable file is the caller's failure). */
+  async #known() {
+    const device = this.#device!
+    return (await this.#services.state()).devices.find((entry) => entry.id === device.id)
+  }
+
+  /** Seal `message` for the phone. Over the frame limit, a list of `items` loses its oldest; anything else is refused. */
+  #send(message: { id?: number; result?: object; error?: object; event?: string; data?: unknown }) {
     if (this.closed || !this.#session) return
-    this.#transport.send(
-      seal(this.#session.kMP, this.#sent++, Buffer.from(JSON.stringify(message)), this.#session.h),
-    )
+    let body = Buffer.from(JSON.stringify(message))
+    if (body.length > MAX_PLAINTEXT) {
+      const field = message.result ? 'result' : 'data'
+      const held = message[field] as { items?: unknown[] } | undefined
+      if (Array.isArray(held?.items)) {
+        const items = held.items.slice()
+        while (items.length && body.length > MAX_PLAINTEXT) {
+          items.shift()
+          body = Buffer.from(JSON.stringify({ ...message, [field]: { ...held, items } }))
+        }
+      }
+      if (body.length > MAX_PLAINTEXT) {
+        if (message.id === undefined) return
+        body = Buffer.from(
+          JSON.stringify({ id: message.id, error: { message: 'Reply too large' } }),
+        )
+      }
+    }
+    this.#transport.send(seal(this.#session.kMP, this.#sent++, body, this.#session.h))
   }
 
   async #handle(frame: Buffer) {
@@ -146,11 +183,11 @@ export class Channel {
   async #call(id: number, method: string, params: Record<string, unknown>) {
     const device = this.#device!
     try {
-      // Re-read the file: a phone revoked from another instance stops here, and only `pair` may come before pairing.
-      const known = (await this.#services.state()).devices.find((entry) => entry.id === device.id)
+      // Re-read the file: a phone removed by another process stops here (or at its next event), and only `pair` may come before pairing.
+      const known = await this.#known()
       if (!known && method !== 'pair') return this.close(UNAUTHORIZED)
       if (known) this.#seen(device.id, known.lastSeen)
-      const handler = methods[method]
+      const handler = Object.hasOwn(methods, method) ? methods[method] : undefined
       if (!handler) throw new RpcError(`Unknown method ${method}`)
       const result = await handler(params, {
         services: this.#services,
@@ -160,7 +197,13 @@ export class Channel {
       })
       this.#send({ id, result })
     } catch (error) {
-      this.#send({ id, error: { message: error instanceof Error ? error.message : String(error) } })
+      if (!(error instanceof RpcError)) this.#services.log(`Phone: ${String(error)}`)
+      this.#send({
+        id,
+        error: {
+          message: error instanceof RpcError ? error.message : 'Something went wrong on the Mac',
+        },
+      })
     }
   }
 }

@@ -56,10 +56,10 @@ says which is missing.
 
 `feed.ts` derives the phone's feed from Voice's transcript (`voice.heard`, `voice.line`, `voice.answer`), the live state of
 @ultimate and the Messages log. `feed.subscribe { limit? }` (default 50, at most 200) answers the newest items and then
-pushes `feed` events with the items that changed.
+pushes `feed` events with the items that changed. A sealed message over the protocol's 1 MiB drops the oldest items until it fits.
 
 - `heard`: a `voice.heard`. `said`: Voice's speech line without `re`. `job`: a forwarded line; `answered` once its
-  `voice.answer` arrived (`detail` is the answer), `failed` when Voice's notice for it arrived (`summary` is the notice, no
+  `voice.answer` arrived (`detail` is the answer, cut at 16 KB), `failed` when Voice's notice for it arrived (`summary` is the notice, no
   `detail`). `speech` and `summary` come from Voice's concluding line (the one with that `re`).
 - `at`: the entry's message time, else the message before it (Voice's lines carry none), except a job's own start time.
 - `phase` on working jobs (all of them): `Thinking`, or a running tool by name (bash "Running a command", read "Reading
@@ -68,14 +68,17 @@ pushes `feed` events with the items that changed.
 - `question`: @ultimate's newest open reply-expected message to the user, on the newest job that started before it.
 
 `say { id, text, via }` opens one Voice phone session per channel (`<device>:<random>`) and passes the line to
-`VoiceLiveApi.heard(text, id)`, which admits an `id` once. `via` is checked but not passed on: `heard` has no such argument,
-so a typed line reaches Voice worded as a live transcript.
+`VoiceLiveApi.heard(text, id, via)`, which admits an `id` once; `via` says whether the line was spoken or typed.
+Replies are sent as written when they are an `RpcError`'s; any other failure reaches the phone as "Something went wrong on the Mac"
+and is logged on the Mac.
 
 ## State
 
 `~/.ultimate/phone.json` (mode 0600, written atomically, re-read whenever it is used so every instance process shares it):
 the machine id, `machineSecret`, the Mac's X25519 key pair, its name, and the paired devices with their token hash,
-push token and Live Activity tokens. Nothing is created until the extension is configured.
+push token and Live Activity tokens (keyed `<instance>:<job>`, since job ids repeat across projects). Changes go through a
+lock file beside it (`phone.json.lock`, broken after 10 s), so processes do not overwrite each other. Nothing is created
+until the extension is configured.
 
 ## Actions
 
@@ -85,12 +88,18 @@ All are user-only (`userActions`).
   `unconfigured` names the missing setting or secret in `error` and says which in `missing` (`'relay'` or `'token'`). `name` is
   the Mac's name from the state file. `push` is `{ configured: true }` or `{ configured: false, error }`. A device's `lastSeen`
   moves when it handshakes or calls a method, at most once a minute.
-- `pairStart` → `{ qr, expires }`: a code for 10 minutes, announced to the relay for this instance only. A phone that scans
+- `pairStart` → `{ expires }`: a code for 10 minutes, announced to the relay for this instance only. The code itself is in
+  `status.pairing` (`{ v, relay, machine, instance, key, token, name, expires, request? }`; `pairingQr` in `refs.ts` makes the
+  `ultimate-pair:` text), so the call trace, which blanks values under `token`, never stores it. A phone that scans
   it calls `pair`, which waits until the user calls `pairAllow { device }` (mints the device token, stores the phone,
   sends `devices`) or `pairDeny { device }` ("Pairing was declined"). `pairCancel` withdraws the code.
   Denying or cancelling answers a waiting phone "Pairing was declined" before the relay is told to withdraw the code.
 - `revoke { device }` removes a phone, tells the relay and closes its open connections with 4401. Other instances notice
-  at the phone's next call.
+  at the phone's next call or the next event they would send it, and close it then.
+
+Changing the relay or its token in the settings reconnects; other settings are read when used and keep the socket and an
+open pairing. When another process of the same project takes the relay socket (4409) this one stays offline
+(`status.replaced`) until it is restarted.
 
 ## UI
 
@@ -100,7 +109,8 @@ is up, grey while connecting, amber while unconfigured or failing, and brand whi
 it stays out of the line, and the palette's `Phone…` opens the popover in its place, saying why. Unconfigured, it shows
 what `error` names, with **Add token** opening the Secrets panel at `ULTIMATE_PHONE_RELAY_TOKEN`. Connected, it lists
 the paired phones with **Remove** (`revoke`, one click) and **Pair a phone**: a QR code with **Cancel**, **Copy code**
-and the time left. A phone that scans it shows as a request naming the phone and this Mac, with **Deny** and **Allow**;
+and the time left. A phone that scans it shows as a request naming the phone and this Mac with a short code (`ABC·DEF`, the start of the phone's
+id) that the phone shows too, and **Deny** and **Allow**;
 nothing is added without that click. After Allow the popover confirms the new phone until it closes.
 
 ## Files
