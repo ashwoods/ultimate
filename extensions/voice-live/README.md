@@ -71,13 +71,15 @@ stored on the `voice.line` data. Voice sets it whenever it speaks @ultimate's an
 
 ## The relay agent and its session
 
-The relay is the standing agent `voice` unless the user's `voiceLive.agent` setting names another: an extension can
-ship its own agent built on this one (`extends: voice`, and `formerly: [voice]` so it takes over the standing
-conversation and its history; see `docs/subagents.md`). The server publishes the name on the root conversation's
-`voice-live.relay` document for the browser and reinstalls on settings changes.
+The relay is the standing agent `voice`, unless a resident agent replaces it: an extension can ship its own agent
+built on this one (`extends: voice`, `formerly: [voice]`, so it takes over the standing conversation and its history;
+see `docs/subagents.md`). The name is discovered once per install, so the request hook stays cheap, and again when a
+browser or phone session starts; the root conversation's `voice-live.relay` document carries it to the browser. A
+forwarded request in @ultimate says `via @<name>` with the current name, so a rename relabels earlier ones too.
 
 Every `voice.heard` and `voice.line` carries `at`, when it was written. A line Voice speaks after a `codemode` lookup in
-the same turn carries `lookup: true` and shows "answered by Voice": it answered without asking @ultimate. The
+the same turn, without passing anything on, carries `lookup: true` and shows "answered by Voice": it answered without
+asking @ultimate. The
 `voice-live.activity` document on the relay's conversation is its current session, recomputed whenever the transcript
 changes: since the first line after 30 quiet minutes (phone reconnects do not split it), the user's and Voice's spoken
 lines (`messages`), requests passed to @ultimate (`relayed`) and those still unanswered (`waiting`), and whether the

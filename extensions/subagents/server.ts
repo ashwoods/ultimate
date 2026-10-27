@@ -545,13 +545,16 @@ export default function subagents(
     )
   /** A resident without a conversation takes over its former name's: the conversation keeps its id and history. */
   const adoptFormer = (index: Record<string, number>, residents: readonly AgentDefinition[]) => {
+    const adopted: string[] = []
     for (const { name, formerly } of residents) {
       if (Object.hasOwn(index, name)) continue
       const former = formerly?.find((old) => Object.hasOwn(index, old))
       if (former === undefined) continue
       index[name] = index[former]
       delete index[former]
+      adopted.push(name)
     }
+    return adopted
   }
   /** Drops standing agents whose definition is gone; their conversations become ordinary ones. Retirement waits
    * until every definition parses: an error names a file, not the agent it defines, so a typo retires nothing. The
@@ -566,9 +569,9 @@ export default function subagents(
     )
     const residents = residentsOf(definitions)
     const kept = new Set(residents.map((definition) => definition.name))
-    await host.harness().commit(async (tx) => {
+    const adopted = await host.harness().commit(async (tx) => {
       const index = await tx.doc(Standing, ROOT_CONVERSATION_ID)
-      adoptFormer(index, residents)
+      const moved = adoptFormer(index, residents)
       for (const name of Object.keys(index)) {
         const id = index[name]
         const exists = await tx.conversation(id)
@@ -585,7 +588,10 @@ export default function subagents(
           await conversations.setStanding(tx, id, false)
         }
       }
+      return moved
     }, ctx)
+    // An adopted conversation runs as its new agent from now on, under its new name, not at its next session.
+    for (const name of adopted) await host.need(SubagentsApi).standing(name, ctx)
   }
   // The definition a conversation runs as: children and standing agents record it, branches and the lander carry it
   // as a label. Its pin, read fresh, is what a conversation whose model lost its login switches to first.

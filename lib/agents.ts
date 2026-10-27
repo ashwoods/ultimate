@@ -403,6 +403,8 @@ export async function discoverAgents(
         const definition = readDefinition(text, path, modelRuntime)
         if (definition.extends !== undefined) {
           const base = definitions.get(definition.extends)
+          // An extension's agent may build on another extension's, which can be off in this project: then it is absent.
+          if (!base && source === 'builtin') continue
           if (!base)
             throw new Error(`extends needs an earlier definition named ${definition.extends}`)
           // The base's overlays are already in its instructions; the base's own `formerly` stays with the base.

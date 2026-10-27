@@ -71,7 +71,7 @@ export type VoiceActivity = {
 /** The Voice conversation's current session, recomputed whenever its transcript changes. */
 export const ActivityDoc = docRef<VoiceActivity>('voice-live.activity')
 
-/** On the root conversation: the relay agent's name, `voice` unless the user's `voiceLive.agent` setting names another. */
+/** On the root conversation: the relay agent's name, `voice` unless a resident agent replaces it (`formerly: [voice]`). */
 export const RelayDoc = docRef<{ name?: string }>('voice-live.relay')
 
 /** No arguments → API key availability, or a reason explaining how to enable it. */

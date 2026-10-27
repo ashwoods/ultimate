@@ -25,7 +25,7 @@ import { VoiceLiveApi } from './api.ts'
 import type { VoiceLiveService } from './api.ts'
 import { voiceBrief } from './brief.ts'
 import { Activity, watchActivity } from './activity.ts'
-import { publishRelayName, Relay, relayId, relayName } from './agent.ts'
+import { freshRelayName, Relay, relayId, relayName } from './agent.ts'
 
 const SECRET = 'OPENAI_API_KEY'
 const NO_KEY = `Live voice needs an OpenAI API key: add ${SECRET} in ⌘K → Secrets`
@@ -70,8 +70,6 @@ const Forwarded = defineDoc<{ scheduled: boolean }>({
 })
 export const userActions = ['status', 'start', 'heard', 'log', 'end']
 export const docs = [Activity, Relay]
-/** The relay agent's name comes from the settings; the browser learns it from the `Relay` document. */
-export const reloadOnSettings = true
 const terminal = {
   status: 'terminal',
   outcome: { status: 'completed', result: null },
@@ -511,7 +509,7 @@ const PHONE_INTRO = {
 /** What other extensions use to drive Voice from a phone: no OpenAI key, no GPT-Live. */
 export const phone = (host: ExtensionHost): VoiceLiveService => ({
   async open(session) {
-    const id = await host.need(SubagentsApi).standing(await relayName(host), context)
+    const id = await host.need(SubagentsApi).standing(await freshRelayName(host), context)
     await write(
       host,
       id,
@@ -541,7 +539,7 @@ export const actions = {
     if (typeof sdp !== 'string' || !sdp.trim()) throw new Error('Expected an SDP offer')
     const key = await apiKey(host, signal)
     if (!key) throw new Error(NO_KEY)
-    const id = await host.need(SubagentsApi).standing(await relayName(host), context)
+    const id = await host.need(SubagentsApi).standing(await freshRelayName(host), context)
     // Put together while the session connects; a failure becomes a brief that says so, never a failed start.
     const main = (await host.harness().snapshot(Standing, ROOT_CONVERSATION_ID, context))?.ultimate
     const brief = makeBrief(host, main)
@@ -648,9 +646,9 @@ export default (host: ExtensionHost) => {
   host.implement(VoiceLiveApi, phone(host))
   let unwatch: (() => void) | undefined
   host.onOpen(async () => {
+    await freshRelayName(host)
     unwatch?.()
     unwatch = watchActivity(host)
-    await publishRelayName(host)
   })
   host.onClose(async () => {
     unwatch?.()
@@ -729,6 +727,9 @@ export default (host: ExtensionHost) => {
                   for (const entry of page.items) {
                     if (entry.kind === 'voice.answer') return { re: (entry.data as VoiceAnswer).re }
                     if (entry.kind === 'voice.heard') return looked ? { lookup: true } : {}
+                    // Passed on in this turn: @ultimate answers it, so this line only acknowledges.
+                    if (entry.kind === 'voice.line' && (entry.data as VoiceLine).forwarded)
+                      return {}
                     looked ||= (entry.model ?? []).some(
                       (m) =>
                         m.role === 'assistant' &&

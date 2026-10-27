@@ -535,10 +535,6 @@ export default { name: 'phone' }
     join(home, '.ultimate/agents/relay.md'),
     '---\nname: relay\nextends: voice\nformerly: [voice]\n---\n\nYou are called Relay.\n',
   )
-  await writeFile(
-    join(home, '.ultimate/settings.json'),
-    JSON.stringify({ voiceLive: { agent: 'relay' } }),
-  )
   expect(await phone('open', { session: 'p2' })).toBe(voice)
   expect(await phone('conversation', null)).toBe(voice)
   const standing = await server.harness.snapshot(Standing, ROOT_CONVERSATION_ID, context)

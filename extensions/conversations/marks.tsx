@@ -16,7 +16,7 @@ export const agentTitle = (name: string) =>
  */
 export type AgentTile = { tint: string; glyph: ReactNode; wordmark?: string }
 /**
- * The tile an extension gives the standing agent it brings, by agent name (`voice-live` gives its relay one); undefined
+ * The tile an extension gives the standing agent it brings, by agent name (a relay agent built on voice-live's, say); undefined
  * for other names. Ultimate's own agents keep theirs.
  */
 export const AgentTiles = definePoint<string, AgentTile | undefined>('conversations.agent-tile')
