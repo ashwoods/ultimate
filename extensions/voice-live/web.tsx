@@ -14,7 +14,7 @@ import {
   Volume2Icon,
   XIcon,
 } from 'lucide-react'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Message, MessageContent, MessageResponse } from '@/components/ai/message'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -43,40 +43,23 @@ import {
   UserText,
   UserView,
 } from '@/sdk'
-import type { EntryRenderer, UltimateActions } from '@/sdk'
+import type { EntryRenderer } from '@/sdk'
 import { AgentMark, agentTitle, ConversationPhase } from '../conversations/ui.tsx'
 import { Body, Bubble } from '../messages/ui.tsx'
 import { SideChatsDoc, useSideChatFront } from '../side-chat/ui.tsx'
 import { UnderUltimate, Unlisted } from '../sidebar/ui.tsx'
-import { openAgentSource, StandingDoc, talkToUltimate } from '../subagents/ui.tsx'
+import { openAgentSource } from '../subagents/ui.tsx'
 import * as live from './live.tsx'
 import type { VoiceMode } from './live.tsx'
-import { RelayDoc, StatusAction } from './refs.ts'
-import { OwnRow } from './ui.tsx'
+import { StatusAction } from './refs.ts'
+import { OwnRow, toggleFront, useRelayIds, useRelayName, useVoiceMode } from './ui.tsx'
 import type { VoiceAnswer, VoiceContext, VoiceLine, VoiceSession, VoiceUtterance } from './refs.ts'
 
 const KEYS = 'alt+v'
-const useMode = () => useSyncExternalStore(live.subscribe, live.voiceMode)
-/** The relay agent's name: `voice` unless the user's settings name another. */
-const useName = () => useDocOf(1, RelayDoc)?.name ?? 'voice'
-
-/** @ultimate's conversation and the Voice conversation, once start created it. */
-function useIds() {
-  const name = useName()
-  const main = useDocOf(1, StandingDoc)?.ultimate
-  const voice = useDocOf(1, StandingDoc)?.[name]
-  return { main, voice }
-}
-
+const useMode = useVoiceMode
+const useName = useRelayName
+const useIds = useRelayIds
 const start = live.start
-
-/** Voice to the front over @ultimate, from anywhere, or back. */
-function toggleFront(actions: Pick<UltimateActions, 'switchConversation' | 'showSurface'>) {
-  const front = !live.voiceMode().front
-  live.setFront(front)
-  // oxlint-disable-next-line typescript/no-floating-promises -- an uncaught action failure becomes a notice.
-  if (front) void talkToUltimate(actions)
-}
 
 const clock = (ms: number) => {
   const seconds = Math.max(0, Math.floor(ms / 1000))
