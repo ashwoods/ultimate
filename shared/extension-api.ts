@@ -67,7 +67,6 @@ export const defaultOff: readonly string[] = [
   'phase',
   'sounds',
   'voice-live',
-  'phone',
 ]
 
 /** Who provides and who consumes each API, as `host.catalogue()` reports it. */
