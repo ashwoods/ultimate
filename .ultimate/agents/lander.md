@@ -1,7 +1,7 @@
 ---
 name: lander
 description: Ultimate's lander; fixes submissions that fail to land, then lands them after every check passes again.
-model: openai-codex/gpt-6.1-sol
+model: anthropic/claude-sonnet-5-5
 thinking: high
 fast: true
 onFailure: fix
