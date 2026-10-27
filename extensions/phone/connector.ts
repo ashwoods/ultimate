@@ -114,9 +114,9 @@ export class Connector {
         // Another process of this instance connected; reconnecting would only take the socket back and forth.
         this.state = 'error'
         this.error = 'Another process of this project took over the relay connection'
+        this.replaced = true
         return
       }
-      this.replaced = true
       this.#fail(this.error ?? (event.reason || `The relay closed the connection (${event.code})`))
     })
   }

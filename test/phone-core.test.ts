@@ -55,7 +55,8 @@ function fakeRelay() {
     }
   }
   const toMac = (message: object) => listeners.get('message')?.({ data: JSON.stringify(message) })
-  return { out, urls, connect, toMac }
+  const drop = (code: number) => listeners.get('close')?.({ code, reason: '' })
+  return { out, urls, connect, toMac, drop }
 }
 type Relay = ReturnType<typeof fakeRelay>
 
@@ -189,6 +190,19 @@ it('says which secret is missing', async () => {
     { voice: fakeVoice().voice, source: new FakeSource(), env: { ULTIMATE_PHONE_RELAY: 'nope' } },
   )
   expect(await badRelay.status()).toMatchObject({ state: 'unconfigured', missing: 'relay' })
+})
+
+it('says it was replaced only when another process took the relay socket', async () => {
+  const { relay, phone } = await fixture()
+  await until(async () => (await phone.status()).state === 'online')
+  relay.drop(1006)
+  expect((await phone.status()).replaced).toBeUndefined()
+  phone.stop()
+  const next = await fixture()
+  await until(async () => (await next.phone.status()).state === 'online')
+  next.relay.drop(4409)
+  expect(await next.phone.status()).toMatchObject({ state: 'error', replaced: true })
+  next.phone.stop()
 })
 
 it('takes the relay token from the environment before the secret', async () => {
