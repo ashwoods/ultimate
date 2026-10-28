@@ -43,7 +43,9 @@ export async function cleanPreview(home: string) {
           '--git-common-dir',
         ).catch((error: unknown) => {
           // Its repository is gone (a preview of a deleted temporary project): nothing is registered to release.
-          if ((error as { stderr?: string }).stderr?.includes('not a git repository'))
+          // Git 2.56 says the gitfile points nowhere; older versions say it is not a repository.
+          const stderr = (error as { stderr?: string }).stderr ?? ''
+          if (/not a git repository|does not point to a valid repository/.test(stderr))
             return undefined
           throw error
         })
