@@ -1,7 +1,7 @@
 ---
 name: reviewer-simplicity
 description: Simplicity, slop and test-quality review of an immutable commit range (Sonnet 5.5).
-model: anthropic/claude-sonnet-5-5
+family: fast
 thinking: high
 fast: true
 tools: [read, bash]

@@ -1,25 +1,51 @@
-import { homedir } from 'node:os'
+import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { expect, it, vi } from 'vitest'
-import { browserBinary } from '../extensions/browser/server.ts'
+import { afterEach, expect, it } from 'vitest'
+import { playwrightChromiums } from '../extensions/browser/server.ts'
+import { removeTemps, temp } from './helpers.ts'
 
-const cache = join(homedir(), 'Library/Caches/ms-playwright')
-const chromium = join(cache, 'chromium-1134/chrome-mac/Chromium.app/Contents/MacOS/Chromium')
+afterEach(removeTemps)
 
-// A Mac with only Playwright's Chromium: no system browser, no Linux cache.
-vi.mock('node:fs/promises', async (importOriginal) => {
-  const fs = await importOriginal<typeof import('node:fs/promises')>()
-  const missing = (path: unknown) =>
-    Promise.reject(Object.assign(new Error(`ENOENT: ${String(path)}`), { code: 'ENOENT' }))
-  return {
-    ...fs,
-    readdir: (path: string) =>
-      path === cache ? Promise.resolve(['chromium-1134', 'ffmpeg-1010']) : missing(path),
-    access: (path: string) => (path === chromium ? Promise.resolve() : missing(path)),
-  }
+it('finds Playwright Chromium in the macOS cache, newest build first', async () => {
+  const home = await temp()
+  const cache = join(home, 'Library/Caches/ms-playwright')
+  for (const name of [
+    'chromium-998',
+    'chromium-1248',
+    'chromium-1208',
+    'chromium_headless_shell-1248',
+  ])
+    await mkdir(join(cache, name), { recursive: true })
+  const app =
+    'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
+  // Older builds, such as chromium-1134 on a Mac that hit this, hold Chromium.app instead.
+  const legacy = 'chrome-mac/Chromium.app/Contents/MacOS/Chromium'
+  expect(await playwrightChromiums(home, 'darwin', 'arm64')).toEqual(
+    ['chromium-1248', 'chromium-1208', 'chromium-998'].flatMap((build) => [
+      join(cache, build, app),
+      join(cache, build, legacy),
+    ]),
+  )
+  expect(await playwrightChromiums(home, 'linux', 'x64')).toEqual([])
 })
 
-it("finds Playwright's Chromium in the macOS cache", async () => {
-  vi.stubEnv('ULTIMATE_CHROMIUM', '')
-  expect(await browserBinary()).toBe(chromium)
+it('finds Playwright Chromium in the Linux cache, newest build first', async () => {
+  const home = await temp()
+  const cache = join(home, '.cache/ms-playwright')
+  for (const name of [
+    'chromium-998',
+    'chromium-1248',
+    'chromium-1208',
+    'chromium_headless_shell-1248',
+    'firefox-1490',
+    'ffmpeg-1011',
+    '.links',
+  ])
+    await mkdir(join(cache, name), { recursive: true })
+  expect(await playwrightChromiums(home, 'linux', 'x64')).toEqual([
+    join(cache, 'chromium-1248', 'chrome-linux64/chrome'),
+    join(cache, 'chromium-1208', 'chrome-linux64/chrome'),
+    join(cache, 'chromium-998', 'chrome-linux64/chrome'),
+  ])
+  expect(await playwrightChromiums(home, 'darwin', 'arm64')).toEqual([])
 })

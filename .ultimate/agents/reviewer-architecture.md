@@ -1,7 +1,7 @@
 ---
 name: reviewer-architecture
 description: Advisory architecture review (Sonnet 5.5); asks whether a range uses Ultimate's own architecture instead of building beside it. Never blocks.
-model: anthropic/claude-sonnet-5-5
+family: fast
 thinking: low
 fast: true
 tools: [read, bash]

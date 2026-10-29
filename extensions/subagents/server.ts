@@ -416,7 +416,7 @@ export const actions = {
   }),
   /** `{name, scope, frontmatter, instructions}`: write `<scope>/agents/<name>.md`; invalid input writes nothing. */
   saveDefinition: implementAction(SaveDefinitionAction, async (args, { host }) => {
-    const { name, scope, frontmatter, instructions, create } = (args ?? {}) as Record<
+    const { name, scope, frontmatter, instructions, create, overlay } = (args ?? {}) as Record<
       string,
       JsonValue
     >
@@ -425,12 +425,24 @@ export const actions = {
     if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter))
       throw new Error('frontmatter must be an object')
     if (typeof instructions !== 'string') throw new Error('instructions must be a string')
-    const { description, model, thinking, tools, denyTools, isolate, resident, fast, summaries } =
-      frontmatter
+    const {
+      description,
+      model,
+      thinking,
+      family,
+      tools,
+      denyTools,
+      isolate,
+      resident,
+      fast,
+      summaries,
+    } = frontmatter
     if (typeof description !== 'string') throw new Error('description is required')
     if (model !== undefined && typeof model !== 'string') throw new Error('model must be a string')
     if (thinking !== undefined && typeof thinking !== 'string')
       throw new Error('thinking must be a string')
+    if (family !== undefined && typeof family !== 'string')
+      throw new Error('family must be a string')
     if (
       tools !== undefined &&
       (!Array.isArray(tools) || !tools.every((tool) => typeof tool === 'string'))
@@ -463,6 +475,7 @@ export const actions = {
       description,
       ...(model ? { model } : {}),
       ...(thinking ? { thinking } : {}),
+      ...(family ? { family } : {}),
       ...(tools ? { tools } : {}),
       ...(denyTools?.length ? { denyTools } : {}),
       ...(isolate ? { isolate } : {}),
@@ -472,8 +485,9 @@ export const actions = {
       ...(existing?.formerly ? { formerly: existing.formerly } : {}),
     }
     // The form shows the merged definition; a whole copy would freeze the overlays' additions and the base's
-    // instructions, so the save becomes an overlay holding only what differs from the base.
-    if (existing?.overlays?.length) {
+    // instructions, so the save becomes an overlay holding only what differs from the base. `overlay` asks for one
+    // too over a definition from another scope (a built-in moved to another family).
+    if (existing?.overlays?.length || (overlay === true && existing && existing.source !== scope)) {
       await saveOverlay(host, host.modelRuntime, scope, name, fields, instructions)
       const { definitions: saved } = await discoverAgents(
         host.ultimateRoot,
@@ -593,7 +607,8 @@ export default function subagents(
         host.userHome,
         host.modelRuntime,
       )
-      return definitions.find((definition) => definition.name === name)?.model
+      const definition = definitions.find((item) => item.name === name)
+      return definition?.runs ? definition.runs.model : definition?.model
     },
   })
   const service: SubagentsService = {
@@ -623,7 +638,7 @@ export default function subagents(
         let created: ConversationRecord | undefined
         // A new conversation starts on the default model; an existing one keeps the model and thinking level chosen
         // in it, so a refresh changes them only where the definition pins them.
-        let base = { ...main, model: hostDefaultModel(host) }
+        let base = { ...main, model: await hostDefaultModel(host) }
         if (id !== undefined && (await tx.conversation(id))) {
           const own = await tx.doc(AgentDoc, id)
           base = {
