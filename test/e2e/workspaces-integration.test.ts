@@ -263,6 +263,9 @@ async function commit(path: string, name = 'change.txt') {
   await git(path, 'commit', '-m', name)
   return git(path, 'rev-parse', 'HEAD')
 }
+/** In a git hook, the command line of the git that runs it: from /proc on Linux, from `ps` on macOS. */
+const gitCommand = `$( [ -r /proc/$PPID/cmdline ] && tr '\\0' ' ' < /proc/$PPID/cmdline || ps -o command= -p $PPID )`
+
 /**
  * Hold the first `git <command>` in the repository at `path` (and its worktrees) at its first ref update, with a
  * reference-transaction hook, until `release`; with `fail`, that update then fails, after the command changed the files.
@@ -275,7 +278,7 @@ async function holdGit(path: string, command: string, fail = false) {
     `#!/bin/sh
 cat >/dev/null
 [ "$1" = prepared ] && [ ! -f '${started}' ] || exit 0
-case "$(ps -o command= -p $PPID)" in "git ${command} "*) ;; *) exit 0 ;; esac
+case "${gitCommand}" in "git ${command} "*) ;; *) exit 0 ;; esac
 mkfifo '${gate}'
 touch '${started}'
 read release < '${gate}'
@@ -2340,7 +2343,7 @@ it.concurrent('a persistent branch deletion failure blocks tools with its reason
     `#!/bin/sh
 cat >/dev/null
 [ "$1" = prepared ] || exit 0
-case "$(ps -o command= -p $PPID)" in "git branch -D "*) exit 1 ;; esac
+case "${gitCommand}" in "git branch -D "*) exit 1 ;; esac
 `,
     { mode: 0o755 },
   )

@@ -15,11 +15,7 @@ export type GroupProcess = ChildProcessByStdio<Writable, Readable, Readable>
  * A process group this process started. `ended` resolves once the leader has exited and nothing of its group is left:
  * `true`, or `false` when a member survived KILL. `closed` resolves when its output pipes have closed.
  */
-export type Group = {
-  child: GroupProcess
-  ended: Promise<boolean>
-  closed: Promise<void>
-}
+export type Group = { child: GroupProcess; ended: Promise<boolean>; closed: Promise<void> }
 
 /**
  * Signalling a group needs positive evidence that it is ours: its leader not yet reaped by this process, or a pid file
@@ -32,9 +28,7 @@ export type Group = {
 function identify(pid: number): string | undefined {
   if (process.platform === 'darwin') {
     try {
-      return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
-        encoding: 'utf8',
-      }).trim()
+      return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
     } catch {
       // ps exits 1 when the pid is gone.
       return undefined
@@ -53,8 +47,8 @@ function identify(pid: number): string | undefined {
 }
 
 /**
- * Whether any process of group `pid` still exists. A member this process may not probe (EPERM) counts as alive: one of
- * another user, or on macOS a zombie until its parent reaps it.
+ * Whether any process of group `pid` still runs. A member this process may not probe (EPERM) counts as alive: one of
+ * another user. macOS also answers EPERM for a killed member that is a zombie until it is reaped; that one has ended.
  */
 export function groupAlive(pid?: number) {
   if (!pid) return false
@@ -62,9 +56,16 @@ export function groupAlive(pid?: number) {
     process.kill(-pid, 0)
     return true
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
-    if ((error as NodeJS.ErrnoException).code === 'EPERM') return true
-    throw error
+    const { code } = error as NodeJS.ErrnoException
+    if (code === 'ESRCH') return false
+    if (code !== 'EPERM') throw error
+    if (process.platform !== 'darwin') return true
+    return execFileSync('ps', ['-axo', 'pgid=,stat='], { encoding: 'utf8' })
+      .split('\n')
+      .some((line) => {
+        const [group, stat] = line.trim().split(/\s+/)
+        return Number(group) === pid && !stat.startsWith('Z')
+      })
   }
 }
 
@@ -113,10 +114,7 @@ async function drain(pid: number, grace: number) {
 export function spawnGroup(
   program: string,
   args: string[],
-  options: Omit<SpawnOptions, 'detached' | 'stdio'> & {
-    pidFile?: string
-    grace?: number
-  },
+  options: Omit<SpawnOptions, 'detached' | 'stdio'> & { pidFile?: string; grace?: number },
 ): Group {
   const { pidFile, grace = 3000, ...rest } = options
   const child = spawn('/bin/sh', ['-c', handshake, program, ...args], {
@@ -134,6 +132,7 @@ export function spawnGroup(
       try {
         resolve(groupAlive(child.pid))
       } catch (error) {
+        // ps failed while checking a member macOS would not let this process probe.
         reject(error)
       }
     })
@@ -271,11 +270,7 @@ export async function runGroup(
   const stop = () =>
     child.pid === undefined
       ? Promise.resolve()
-      : stopGroup(child.pid, {
-          pidFile: options.pidFile,
-          leader: group,
-          grace,
-        })
+      : stopGroup(child.pid, { pidFile: options.pidFile, leader: group, grace })
   // A stop that fails while the leader still runs ends the run at once.
   const failure = Promise.withResolvers<never>()
   const halt = () => {

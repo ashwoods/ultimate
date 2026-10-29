@@ -1,16 +1,26 @@
 import { execFile } from 'node:child_process'
 import { readFile, writeFile, unlink, rename } from 'node:fs/promises'
-import { promisify } from 'node:util'
+import { basename } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { promisify } from 'node:util'
 
-/** The arguments of process `pid`: /proc keeps them NUL-separated; macOS has only `ps`, which joins them with spaces. */
-async function commandArguments(pid: number) {
+const run = promisify(execFile)
+
+/** Whether process `pid` runs Ultimate's core, `server/main.ts`; throws when it cannot tell. */
+async function isCore(pid: number) {
   if (process.platform === 'darwin') {
-    const { stdout } = await promisify(execFile)('ps', ['-ww', '-o', 'command=', '-p', String(pid)])
-    return stdout.trim().split(' ')
+    // macOS has no /proc: `ps` names the executable and joins the arguments with spaces.
+    const ps = async (field: string) =>
+      (await run('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)])).stdout.trim()
+    return (
+      basename(await ps('comm')) === basename(process.execPath) &&
+      /(?:^|\/)server\/main\.ts(?: |$)/.test(await ps('command'))
+    )
   }
-  return (await readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0')
+  const command = await readFile(`/proc/${pid}/cmdline`, 'utf8')
+  return command.split('\0').some((arg) => /(?:^|\/)server\/main\.ts$/.test(arg))
 }
+
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 export function alive(pid: number) {
   try {
@@ -31,25 +41,24 @@ export async function retireStorageOwner(path: string) {
   }
   const owner = await readOwner(path)
   if (!owner || !alive(owner.pid)) return
-  let command: string[]
+  let core: boolean
   try {
-    command = await commandArguments(owner.pid)
+    core = await isCore(owner.pid)
   } catch (error) {
+    // It exited while being checked: nothing to retire.
     if (!alive(owner.pid)) return
     throw new Error(`Cannot verify storage owner pid ${owner.pid}; refusing to signal it`, {
       cause: error,
     })
   }
-  if (!command.some((arg) => /(?:^|\/)server\/main\.ts$/.test(arg)))
+  if (!core)
     throw new Error(`Storage owner pid ${owner.pid} is not an Ultimate core; refusing to signal it`)
   const signal = (name: NodeJS.Signals) => {
     try {
       process.kill(owner.pid, name)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
-        throw new Error(`Cannot signal Ultimate core pid ${owner.pid}`, {
-          cause: error,
-        })
+        throw new Error(`Cannot signal Ultimate core pid ${owner.pid}`, { cause: error })
     }
   }
   signal('SIGTERM')
