@@ -1,9 +1,40 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { sourceCopy, cleanEnv, until, temp, removeTemp } from '../helpers.ts'
+
+/** The `NAME=value` pairs of process `pid`'s environment, NUL-separated in /proc; on macOS `ps eww` appends them to the command. */
+async function environmentOf(pid: number) {
+  if (process.platform !== 'darwin')
+    return (await readFile(`/proc/${pid}/environ`, 'utf8')).split('\0')
+  const line = execFileSync('ps', ['eww', '-o', 'command=', '-p', String(pid)], {
+    encoding: 'utf8',
+  })
+  return line
+    .trim()
+    .split(' ')
+    .filter((word) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(word))
+}
+/** Whether process `pid` is gone or only a zombie. */
+async function gone(pid: number) {
+  if (process.platform === 'darwin') {
+    try {
+      return execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], {
+        encoding: 'utf8',
+      }).startsWith('Z')
+    } catch {
+      // ps exits 1 when the pid is gone.
+      return true
+    }
+  }
+  try {
+    return /\) Z /.test(await readFile(`/proc/${pid}/stat`, 'utf8'))
+  } catch {
+    return true
+  }
+}
 
 it('terminates an isolated instance after its owner is SIGKILLed', async () => {
   const home = await temp('ultimate-owner-test-')
@@ -63,19 +94,17 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     const port = Number(new URL(instance!.url).port)
     expect(port).toBeGreaterThan(0)
     expect(port).toBeLessThanOrEqual(65535)
-    const environment = await readFile(`/proc/${instance!.pid}/environ`, 'utf8')
+    const entries = await environmentOf(instance!.pid)
+    const environment = entries.join('\0')
     expect(environment).not.toContain('ULTIMATE_SUPERVISED=')
     expect(environment).not.toContain('ULTIMATE_PUBLIC_URL=')
     expect(environment).not.toContain('ULTIMATE_GENERATION=')
     expect(environment).not.toContain('ULTIMATE_PREVIOUS_BUILD=')
     const env = Object.fromEntries(
-      environment
-        .split('\0')
-        .filter(Boolean)
-        .map((entry) => {
-          const separator = entry.indexOf('=')
-          return [entry.slice(0, separator), entry.slice(separator + 1)]
-        }),
+      entries.filter(Boolean).map((entry) => {
+        const separator = entry.indexOf('=')
+        return [entry.slice(0, separator), entry.slice(separator + 1)]
+      }),
     )
     expect(env).toMatchObject({
       ULTIMATE_HOME: instance!.home,
@@ -90,13 +119,7 @@ it('terminates an isolated instance after its owner is SIGKILLed', async () => {
     const exited = once(owner, 'exit')
     owner.kill('SIGKILL')
     await exited
-    await until(async () => {
-      try {
-        return /\) Z /.test(await readFile(`/proc/${instance!.pid}/stat`, 'utf8'))
-      } catch {
-        return true
-      }
-    }, 5000)
+    await until(() => gone(instance!.pid), 5000)
   } finally {
     if (owner.exitCode === null && owner.signalCode === null) {
       const exited = once(owner, 'exit')

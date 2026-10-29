@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
@@ -11,14 +11,41 @@ import {
 } from '../../lib/process-group.ts'
 import { removeTemp, temp, until } from '../helpers.ts'
 
+const darwin = process.platform === 'darwin'
+/** `ps`'s answer for process `pid` (empty once it is gone); macOS has no /proc. */
+const ps = (field: string, pid: number) => {
+  try {
+    return execFileSync('ps', ['-o', `${field}=`, '-p', String(pid)], {
+      encoding: 'utf8',
+    }).trim()
+  } catch {
+    // ps exits 1 when the pid is gone.
+    return ''
+  }
+}
 /** Whether process `pid` still runs; a killed orphan may stay a zombie until init reaps it. */
 const running = async (pid: number) => {
+  if (darwin) {
+    const state = ps('stat', pid)
+    return state !== '' && state[0] !== 'Z'
+  }
   const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(() => '')
   return stat !== '' && stat.slice(stat.lastIndexOf(')') + 2)[0] !== 'Z'
 }
-const startTicks = async (pid: number) =>
-  (await readFile(`/proc/${pid}/stat`, 'utf8')).split(') ')[1].split(' ')[19]
 const bootId = async () => (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()
+/** The start time a pid file records for `pid`: `ps`'s start time on macOS, boot id and start ticks on Linux. */
+const startTime = async (pid: number) =>
+  darwin
+    ? ps('lstart', pid)
+    : `${await bootId()}:${(await readFile(`/proc/${pid}/stat`, 'utf8')).split(') ')[1].split(' ')[19]}`
+/** A start time `pid` did not have: what a recycled pid's old record holds. */
+const otherStartTime = async (pid: number) =>
+  darwin
+    ? 'Thu Jan  1 00:00:00 1970'
+    : (await startTime(pid)).replace(/\d+$/, (ticks) => String(Number(ticks) - 1))
+/** What a start time looks like in a pid file. */
+const startPattern = async () =>
+  darwin ? '[A-Z][a-z]{2} [A-Z][a-z]{2} [ \\d]\\d [\\d:]{8} \\d{4}' : `${await bootId()}:\\d+`
 
 it('records the pid and start time before the program runs, and the program keeps that pid', async () => {
   const directory = await temp('ultimate-process-group-')
@@ -33,7 +60,7 @@ it('records the pid and start time before the program runs, and the program keep
     await closed
     expect(output).toBe(`${child.pid}\n${child.pid}\n`)
     expect(await readFile(`${pidFile}.start`, 'utf8')).toMatch(
-      new RegExp(`^${await bootId()}:\\d+\n$`),
+      new RegExp(`^${await startPattern()}\n$`),
     )
   } finally {
     await removeTemp(directory)
@@ -125,7 +152,9 @@ it('never signals a pid file whose pid now names another process, or a group who
   const directory = await temp('ultimate-process-group-')
   const stranger = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' })
   // A group whose leader exited while a member lives on.
-  const orphaned = spawn('/bin/sh', ['-c', 'sleep 60 & echo $!'], { detached: true })
+  const orphaned = spawn('/bin/sh', ['-c', 'sleep 60 & echo $!'], {
+    detached: true,
+  })
   const member = await new Promise<string>((resolve) =>
     orphaned.stdout.once('data', (data: Buffer) => resolve(data.toString().trim())),
   )
@@ -134,10 +163,7 @@ it('never signals a pid file whose pid now names another process, or a group who
     const pidFile = join(directory, 'run.pid')
     // The same pid, started at another moment: a recycled pid.
     await writeFile(pidFile, `${stranger.pid}\n`)
-    await writeFile(
-      `${pidFile}.start`,
-      `${await bootId()}:${Number(await startTicks(stranger.pid!)) - 1}\n`,
-    )
+    await writeFile(`${pidFile}.start`, `${await otherStartTime(stranger.pid!)}\n`)
     await stopGroup(stranger.pid!, { pidFile, grace: 100 })
     expect(groupAlive(stranger.pid)).toBe(true)
     expect(await readdir(directory)).toEqual([])
@@ -158,10 +184,7 @@ it('sweeps the groups that pid files a crash left behind name, keeping the ones 
   const live = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' })
   try {
     await writeFile(join(directory, 'left.pid'), `${orphan.pid}\n`)
-    await writeFile(
-      join(directory, 'left.pid.start'),
-      `${await bootId()}:${await startTicks(orphan.pid!)}\n`,
-    )
+    await writeFile(join(directory, 'left.pid.start'), `${await startTime(orphan.pid!)}\n`)
     await writeFile(join(directory, 'live.pid'), `${live.pid}\n`)
     await writeFile(join(directory, 'note.txt'), 'not a pid file')
     await sweepPidFiles(directory, (name) => name === 'live.pid')
@@ -215,11 +238,13 @@ it('runs a group to its exit code and stops it on abort; an aborted signal runs 
 it('returns when a process outside the group keeps its output open', async () => {
   const directory = await temp('ultimate-process-group-')
   const pidFile = join(directory, 'escaped')
+  // A process in a session of its own: `setsid` on Linux, which macOS lacks; perl makes the same call there.
+  const setsid = darwin ? "perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'" : 'setsid'
   try {
     const began = Date.now()
     const code = await runGroup(
       '/bin/sh',
-      ['-c', `setsid sleep 60 & echo $! > '${pidFile}'; sleep 0.3`],
+      ['-c', `${setsid} sleep 60 & echo $! > '${pidFile}'; sleep 0.3`],
       {
         cwd: directory,
         pidFile: join(directory, 'pids', 'a.pid'),

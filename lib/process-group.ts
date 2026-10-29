@@ -15,7 +15,11 @@ export type GroupProcess = ChildProcessByStdio<Writable, Readable, Readable>
  * A process group this process started. `ended` resolves once the leader has exited and nothing of its group is left:
  * `true`, or `false` when a member survived KILL. `closed` resolves when its output pipes have closed.
  */
-export type Group = { child: GroupProcess; ended: Promise<boolean>; closed: Promise<void> }
+export type Group = {
+  child: GroupProcess
+  ended: Promise<boolean>
+  closed: Promise<void>
+}
 
 /**
  * Signalling a group needs positive evidence that it is ours: its leader not yet reaped by this process, or a pid file
@@ -28,7 +32,9 @@ export type Group = { child: GroupProcess; ended: Promise<boolean>; closed: Prom
 function identify(pid: number): string | undefined {
   if (process.platform === 'darwin') {
     try {
-      return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
+      return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+        encoding: 'utf8',
+      }).trim()
     } catch {
       // ps exits 1 when the pid is gone.
       return undefined
@@ -46,7 +52,10 @@ function identify(pid: number): string | undefined {
   return `${readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${ticks}`
 }
 
-/** Whether any process of group `pid` still exists. */
+/**
+ * Whether any process of group `pid` still exists. A member this process may not probe (EPERM) counts as alive: one of
+ * another user, or on macOS a zombie until its parent reaps it.
+ */
 export function groupAlive(pid?: number) {
   if (!pid) return false
   try {
@@ -54,16 +63,6 @@ export function groupAlive(pid?: number) {
     return true
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false
-    throw error
-  }
-}
-
-/** Like `groupAlive`, but a member this process may not probe (EPERM) counts as alive. */
-function probe(pid: number) {
-  try {
-    return groupAlive(pid)
-  } catch (error) {
-    // A member of another user survived, so the group is still there.
     if ((error as NodeJS.ErrnoException).code === 'EPERM') return true
     throw error
   }
@@ -114,7 +113,10 @@ async function drain(pid: number, grace: number) {
 export function spawnGroup(
   program: string,
   args: string[],
-  options: Omit<SpawnOptions, 'detached' | 'stdio'> & { pidFile?: string; grace?: number },
+  options: Omit<SpawnOptions, 'detached' | 'stdio'> & {
+    pidFile?: string
+    grace?: number
+  },
 ): Group {
   const { pidFile, grace = 3000, ...rest } = options
   const child = spawn('/bin/sh', ['-c', handshake, program, ...args], {
@@ -127,8 +129,7 @@ export function spawnGroup(
   })
   const left = new Promise<boolean>((resolve, reject) => {
     child.once('error', () => resolve(false))
-    // Checked in the same tick as the leader's reaping, so a group still there is ours. A member this process may not
-    // probe (EPERM) must not throw inside the listener.
+    // Checked in the same tick as the leader's reaping, so a group still there is ours.
     child.once('exit', () => {
       try {
         resolve(groupAlive(child.pid))
@@ -200,7 +201,7 @@ export async function stopGroup(
     }
     // After a KILL the leader's exit drains the rest of the group, with its own grace. `ended` is settled once and
     // for all, so a group that reported a survivor is probed again: once empty, it exited after all.
-    if (!(await within(leader.ended, grace + 3500)) && (unreaped() || probe(pid)))
+    if (!(await within(leader.ended, grace + 3500)) && (unreaped() || groupAlive(pid)))
       throw new Error(`Process group ${pid} did not exit`)
   } else {
     const recorded = pidFile && (await readPidFile(pidFile)) === pid
@@ -270,7 +271,11 @@ export async function runGroup(
   const stop = () =>
     child.pid === undefined
       ? Promise.resolve()
-      : stopGroup(child.pid, { pidFile: options.pidFile, leader: group, grace })
+      : stopGroup(child.pid, {
+          pidFile: options.pidFile,
+          leader: group,
+          grace,
+        })
   // A stop that fails while the leader still runs ends the run at once.
   const failure = Promise.withResolvers<never>()
   const halt = () => {
