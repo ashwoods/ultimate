@@ -169,6 +169,13 @@ it('loads external project facets over user and built-in names, actions and tran
   })
   expect(record().server?.error).toBeUndefined()
   const added = join(projectRoot, '.ultimate/extensions/added')
+  // Load the module before the change, so the first wait below needs the watcher's event: macOS FSEvents merges a
+  // create and a remove within ~100 ms into one event that the watcher cannot tell apart from a file it never saw.
+  expect(
+    (await server.vite.ssrLoadModule('virtual:ultimate/web-facets')).loaders[
+      join(added, 'web.tsx')
+    ],
+  ).toBeUndefined()
   await mkdir(added, { recursive: true })
   await writeFile(join(added, 'web.tsx'), 'export default {}')
   await until(
