@@ -1,6 +1,16 @@
+import { execFile } from 'node:child_process'
 import { readFile, writeFile, unlink, rename } from 'node:fs/promises'
+import { promisify } from 'node:util'
 import { DatabaseSync } from 'node:sqlite'
 
+/** The arguments of process `pid`: /proc keeps them NUL-separated; macOS has only `ps`, which joins them with spaces. */
+async function commandArguments(pid: number) {
+  if (process.platform === 'darwin') {
+    const { stdout } = await promisify(execFile)('ps', ['-ww', '-o', 'command=', '-p', String(pid)])
+    return stdout.trim().split(' ')
+  }
+  return (await readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0')
+}
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 export function alive(pid: number) {
   try {
@@ -21,23 +31,25 @@ export async function retireStorageOwner(path: string) {
   }
   const owner = await readOwner(path)
   if (!owner || !alive(owner.pid)) return
-  let command: string
+  let command: string[]
   try {
-    command = await readFile(`/proc/${owner.pid}/cmdline`, 'utf8')
+    command = await commandArguments(owner.pid)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !alive(owner.pid)) return
+    if (!alive(owner.pid)) return
     throw new Error(`Cannot verify storage owner pid ${owner.pid}; refusing to signal it`, {
       cause: error,
     })
   }
-  if (!command.split('\0').some((arg) => /(?:^|\/)server\/main\.ts$/.test(arg)))
+  if (!command.some((arg) => /(?:^|\/)server\/main\.ts$/.test(arg)))
     throw new Error(`Storage owner pid ${owner.pid} is not an Ultimate core; refusing to signal it`)
   const signal = (name: NodeJS.Signals) => {
     try {
       process.kill(owner.pid, name)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
-        throw new Error(`Cannot signal Ultimate core pid ${owner.pid}`, { cause: error })
+        throw new Error(`Cannot signal Ultimate core pid ${owner.pid}`, {
+          cause: error,
+        })
     }
   }
   signal('SIGTERM')
