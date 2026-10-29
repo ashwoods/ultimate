@@ -6,7 +6,6 @@
     "families": {
       "lead": { "model": "anthropic/claude-opus-5-5", "thinking": "high", "color": "orange" },
       "review": { "model": "anthropic/claude-opus-5-5", "thinking": "high" },
-      "slow": { "model": "anthropic/claude-opus-5-5", "thinking": "high" },
       "fast": { "model": "anthropic/claude-sonnet-5-5" },
       "tiny": { "model": "anthropic/claude-haiku-5-5", "thinking": "low" },
       "design": { "model": "anthropic/claude-opus-5-5" }
