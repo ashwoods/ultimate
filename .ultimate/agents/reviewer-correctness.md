@@ -1,6 +1,6 @@
 ---
 name: reviewer-correctness
-description: Correctness, security and regressions review of an immutable commit range (Opus 5.5).
+description: Correctness, security and regressions review of an immutable commit range.
 family: review
 tools: [read, bash]
 ---

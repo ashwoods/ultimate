@@ -5,13 +5,6 @@ import type { MessagesData, Message, Remote } from './refs.ts'
 export const remoteLabel = (remote: Pick<Remote, 'project' | 'machine'>) =>
   `@ultimate@${remote.project} on ${remote.machine}`
 
-/** Whether tool call `call` ended in an error, from its stored result. */
-export const callFailed = (entries: readonly EntryRecord[], call: string) =>
-  entries.some((entry) => {
-    const message = entry.model?.[0]
-    return message?.role === 'toolResult' && message.toolCallId === call && message.isError
-  })
-
 /** Only incoming requests belong to an answer, never the outgoing reply log item. */
 export function answeredMessages(messages: Message[], conversation: number, entry: number) {
   return messages.filter((message) => message.to === conversation && message.answer === entry)
@@ -28,8 +21,8 @@ export const waitingOnUser = (log: MessagesData) =>
  * Where a conversation stands, the one state every view shows:
  * - `paused`: the host is paused and its run is parked: no task of it executes until Play;
  * - `working`: it runs, or has input queued;
- * - `waits`: the primary agent (@ultimate) has a question open with the user, the only
- *   state that asks the user to act;
+ * - `waits`: the primary agent (@ultimate) counts every question open with the user; a non-subagent
+ *   conversation has one of its own open. This is the state that asks the user to act;
  * - `awaiting`: a conversation that is no subagent asked the primary agent (a branch asking @ultimate) and waits for
  *   the answer, or reported to it and has not heard from it since; a subagent's questions go to its parent, which
  *   answers them in its own run;
@@ -65,7 +58,15 @@ export function conversationState(
   const { id, kind, runState } = conversation
   if (conversation.parked) return 'paused'
   if (conversation.busy || runState === 'working' || runState === 'queued') return 'working'
-  if (kind === 'primary' && waitingOnUser(log) > 0) return 'waits'
+  if (
+    kind === 'primary'
+      ? waitingOnUser(log) > 0
+      : kind !== 'subagent' &&
+        log.messages.some(
+          (m) => m.from === id && m.to === 'user' && m.reply && m.state === 'delivered',
+        )
+  )
+    return 'waits'
   if (
     kind !== 'subagent' &&
     awaitsPrimary(id, conversation.primary, log, () => conversation.concludedSince)
@@ -78,8 +79,8 @@ export function conversationState(
 
 /**
  * Whether conversation `id` waits on the primary agent: a reply-enabled message to it is open, or its latest report
- * (a routed final answer after it stopped with nothing under way) came after the primary agent's latest message to it
- * and after it was last concluded.
+ * (a routed final answer after it stopped with nothing under way) or a branch's reply to the primary agent's message
+ * (`awaits`) came after the primary agent's latest message to it and after it was last concluded.
  */
 function awaitsPrimary(
   id: number,
@@ -92,7 +93,7 @@ function awaitsPrimary(
   for (const message of log.messages) {
     if (message.from === id && message.to === primary) {
       if (isOpen(message)) return true
-      if (message.report && !settled(message, concludedSince)) reported = true
+      if ((message.report || message.awaits) && !settled(message, concludedSince)) reported = true
     } else if (message.from === primary && message.to === id) reported = false
   }
   return reported
@@ -145,6 +146,7 @@ export const scriptMessaged = (
 const hiddenKinds = new Set([
   'board.wake',
   'board.open',
+  'board.answered',
   'setup.note',
   'questions.asked',
   'questions.answers',
@@ -188,19 +190,27 @@ export function backgroundRow(
           (call.arguments as { to?: unknown } | undefined)?.to !== 'user'),
     )
   if (message.stopReason !== 'stop') return false
+  if (routedTo(log?.messages ?? [], entry).length) return true
   const answered = answeredMessages(log?.messages ?? [], entry.conversationId, entry.id)
   return answered.length > 0 && answered.every((m) => m.reply && m.from !== 'user')
 }
 
+/** The branches a final answer went down to (`board.route`): an answer to them, not to the user. */
+const routedTo = (messages: readonly Message[], entry: EntryRecord) =>
+  messages.filter((m) => m.from === entry.conversationId && m.routed === entry.id)
+
 /**
  * Whether a row of @ultimate's compact transcript is the conversation itself, what the user reads: their inputs, @ultimate's
- * messages and answers to them, and setup cards they act on. Everything between two such rows recedes.
+ * messages and answers to them. Everything between two such rows recedes; cards that ask the user to act (`attention`
+ * renderers) stay out of it too. `hidden` for a row that renders nothing in compact mode, or that a stretch's line does
+ * not count: a system prompt change.
  */
 export function threadRow(
   row: { entry: EntryRecord; calls: readonly { id: string; name: string; arguments: unknown }[] },
   log: Readonly<MessagesData> | null | undefined,
-): boolean {
+): boolean | 'hidden' {
   const { entry, calls } = row
+  if (hiddenKinds.has(entry.kind) || entry.kind === 'pi.system') return 'hidden'
   if (entry.kind === 'pi.user') return true
   if (entry.kind === 'board.message' || entry.kind === 'board.reply')
     return (entry.data as { from?: unknown } | undefined)?.from === 'user'
@@ -208,7 +218,6 @@ export function threadRow(
   if (calls.length)
     return calls.some(
       (call) =>
-        call.name === 'setup' ||
         scriptMessaged(call, log) ||
         (call.name === 'message' &&
           (call.arguments as { to?: unknown } | undefined)?.to === 'user'),
@@ -277,7 +286,10 @@ export function counterparts(
       const to = /^#(\d+)$/.exec(String((call.arguments as { to?: unknown } | undefined)?.to))
       return to ? [Number(to[1])] : []
     })
-  return answeredMessages(log.messages, entry.conversationId, entry.id).flatMap((m) => idOf(m.from))
+  return [
+    ...answeredMessages(log.messages, entry.conversationId, entry.id).flatMap((m) => idOf(m.from)),
+    ...routedTo(log.messages, entry).flatMap((m) => idOf(m.to)),
+  ]
 }
 
 /** The user's answer to a question they were asked, once it has one. */

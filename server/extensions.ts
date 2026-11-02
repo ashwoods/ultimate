@@ -22,7 +22,7 @@ import type { ConversationSummary, ExtensionInfo, SystemInfo } from '../shared/p
 import type { PreparedHost } from './harness.ts'
 import { Metadata } from './metadata.ts'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { AgentDoc } from '@earendil-works/pi-durable'
+import { AgentDoc, LiveDoc } from '@earendil-works/pi-durable'
 import type { ConversationId } from '@earendil-works/pi-durable'
 import type { Access } from './request-security.ts'
 import { EventFeed, eventLog } from './events.ts'
@@ -50,10 +50,10 @@ export type ExtensionHost = Pick<
 > & {
   access: Pick<Access, 'allow'>
   notice(message: string): void
-  provide(name: string, value: unknown): void
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
-  use<T>(name: string): T | undefined
-  /** Provide the service of `api`, with the reload semantics of `provide`. Facet scope only. */
+  /**
+   * Provide the service of `api`. Facet scope only: staged until the facet installs, replaced on reload, kept when a
+   * reload fails, and removed when the facet is disabled, removed or closed.
+   */
   implement<S>(api: Api<string, S>, value: NoInfer<S>): void
   /** A handle to the current provider of `api`; throws while none is enabled, except during facet setup. */
   need<S>(api: Api<string, S>): S
@@ -69,6 +69,8 @@ export type ExtensionHost = Pick<
   /** Run `callback` each time before the harness closes while the process stays: on a core swap. */
   onRelease(callback: () => Promise<void>): void
   onClose(cleanup: () => Promise<void>): void
+  /** Run `callback` each time an extension's server facet fails to load, with its name and error; facet-scoped. */
+  onLoadError(callback: (name: string, error: string) => void): void
   harness(): Harness
   system(): SystemInfo
   /** Summaries of every conversation, as the web's conversation list shows them; empty until the harness is open. */
@@ -171,12 +173,10 @@ export async function loadExtensions(
       get chapter() {
         return extensionHost.chapter
       },
-      provide: (serviceName, value) => {
-        provided.get(facetHost)!.set(serviceName, value)
-        if (facetHosts.get(name) === facetHost)
-          providers.set(serviceName, { owner: facetHost, value })
+      implement: (api, value) => {
+        provided.get(facetHost)!.set(api.name, value)
+        if (facetHosts.get(name) === facetHost) providers.set(api.name, { owner: facetHost, value })
       },
-      implement: (api, value) => facetHost.provide(api.name, value),
       need: <S>(api: Api<string, S>): S =>
         apis.need(facetHost, name, api, facetHosts.get(name) !== facetHost),
       want: <S>(api: Api<string, S>): S | undefined => apis.want(facetHost, name, api),
@@ -236,6 +236,10 @@ export async function loadExtensions(
         if (sharedResource) extensionHost.onClose(cleanup)
         else facetCleanups.get(facetHost)!.add(cleanup)
       },
+      onLoadError: (callback) => {
+        loadErrorListeners.add(callback)
+        stops.add(() => loadErrorListeners.delete(callback))
+      },
       react: (reactorName, tokens, handler, options) => {
         const reactor = log.reactor(`${name}/${reactorName}`, tokens, handler, options)
         facetHost.onOpen(reactor.start)
@@ -263,9 +267,12 @@ export async function loadExtensions(
   const findDoc = (kind: string) =>
     [
       EventFeed as never as ConversationDocToken<JsonObject>,
+      // A conversation's live round without its transcript, for watchers of many conversations (the sound of agents).
+      LiveDoc as never as ConversationDocToken<JsonObject>,
       ...[...documents.values()].flat(),
     ].find((doc) => doc.definition.kind === kind)
   const openers = new Set<() => Promise<void>>()
+  const loadErrorListeners = new Set<(name: string, error: string) => void>()
   const releasers = new Set<() => Promise<void>>()
   let open = false
   const cleanups = new Set<() => Promise<void>>()
@@ -322,11 +329,6 @@ export async function loadExtensions(
       throw new Error('Reactors require a facet scope')
     },
     eventLog: log.eventLog,
-    provide: () => {
-      throw new Error('Providers require a facet scope')
-    },
-    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
-    use: <T>(name: string) => providers.get(name)?.value as T | undefined,
     implement: () => {
       throw new Error('Providers require a facet scope')
     },
@@ -353,6 +355,7 @@ export async function loadExtensions(
       releasers.add(callback)
     },
     onClose: (cleanup) => cleanups.add(cleanup),
+    onLoadError: (callback) => loadErrorListeners.add(callback),
     ultimateRoot: host.ultimateRoot,
     projectRoot: host.projectRoot,
     userHome: host.userHome,
@@ -564,7 +567,12 @@ export async function loadExtensions(
             )
           )
             throw new Error('pollActions must contain registered action names')
-          const secrets = validateSecrets(module.secrets ?? [])
+          // A function derives them from the facet's config; it runs again on each reload.
+          const secrets = validateSecrets(
+            typeof module.secrets === 'function'
+              ? await module.secrets(facetHost)
+              : (module.secrets ?? []),
+          )
           // Pi lets the last extension win a tool name silently. A later source layer overriding a tool on purpose is
           // fine (a project's bash over coding-tools); within one layer, the extension holding the name keeps it.
           const taken = host.registry
@@ -611,6 +619,7 @@ export async function loadExtensions(
             ...(previous?.server ?? { tools: [], sections: [], hooks: 0, docs: [] }),
             error: String(error),
           }
+          for (const listener of loadErrorListeners) listener(name, String(error))
         }
       } else if (!enabled || !record.facets.server) {
         await unload(name)

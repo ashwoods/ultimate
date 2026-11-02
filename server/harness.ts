@@ -5,6 +5,7 @@ import { projectHome } from './project.ts'
 import type { Source } from './project.ts'
 import { compareExtensions } from './discovery.ts'
 import { acquireLock } from './lock.ts'
+import { identify } from '../lib/process-group.ts'
 import { join } from 'node:path'
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import type { FauxProviderHandle } from '@earendil-works/pi-ai/providers/faux'
@@ -37,6 +38,7 @@ import type {
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { openNodeSqliteStorage } from '@earendil-works/pi-durable/storage/sqlite/node'
 import { createBuild } from './build.ts'
+import { spawn } from '../lib/spawn.ts'
 import { applyHttpProxySettings, configureHttpDispatcher } from './http.ts'
 import type { Notice } from '../shared/protocol.ts'
 
@@ -144,7 +146,8 @@ export async function prepareHarness(options: HostOptions) {
   const env = ({ cwd = projectRoot }: EnvTarget) => {
     let found = envs.get(cwd)
     if (!found) {
-      found = new NodeExecutionEnv({ cwd })
+      // Agents' commands start from the process helper (the patched spawn option), never by forking this process.
+      found = new NodeExecutionEnv({ cwd, spawn })
       envs.set(cwd, found)
     }
     return found
@@ -216,9 +219,12 @@ export async function prepareHarness(options: HostOptions) {
     extensionSources,
     faux,
     async open(resume = true) {
+      // The supervisor checks this start identity before it signals a stale owner (retireStorageOwner).
+      const coreStart = identify(process.pid)
+      if (!coreStart) throw new Error(`Cannot identify Ultimate core pid ${process.pid}`)
       const owner = await acquireLock(
         join(home, 'storage.lock'),
-        { pid: process.pid },
+        { pid: process.pid, coreStart },
         process.env.ULTIMATE_SUPERVISED === '1' ? 10000 : 0,
       )
       let harness: Harness | undefined

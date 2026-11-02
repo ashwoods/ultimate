@@ -149,12 +149,13 @@ export async function sourceCopy(parent: string) {
   await linkDependencies(root)
   const config = join(root, 'vite.config.ts')
   // Optimize on page requests, not fixture boot; React's plugin otherwise eagerly includes deps.
+  // This config is immutable after boot: ignore stale native events replayed from the initial copy.
   await writeFile(
     config,
     (await readFile(config, 'utf8'))
       .replace(
         'export default defineConfig({',
-        "export default defineConfig({ cacheDir: '.vite-cache', optimizeDeps: { entries: [] },",
+        "export default defineConfig({ cacheDir: '.vite-cache', optimizeDeps: { entries: [] }, server: { watch: { ignored: [(file) => file === fileURLToPath(import.meta.url)] } },",
       )
       .replace(
         'plugins: [react(), tailwindcss()],',
@@ -266,7 +267,7 @@ export async function post(server: string | { url: string }, path: string, data:
 /** Read `/api/events`, subscribing each stream it opens as sub 0 to a conversation (the root by default) and its documents. */
 export async function attach(
   server: string | { url: string },
-  subscription: { conversation?: number; docs?: string[] } = {},
+  subscription: { conversation?: number; docs?: string[]; view?: boolean } = {},
 ) {
   const url = typeof server === 'string' ? server : server.url
   const controller = new AbortController()
@@ -318,7 +319,7 @@ export async function attach(
       await yieldIO()
     }
   })()
-  await until(() => !!view)
+  await until(() => (subscription.view === false ? connections > 0 : !!view))
   return {
     events,
     system: () => system!,

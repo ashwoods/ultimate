@@ -5,10 +5,12 @@ import {
 import {
   getClaudeStatus,
   closeClaudeProcesses,
+  useSpawn,
 } from '@earendil-works/pi-claude-code/src/claude-cli.ts'
 import { defineExtension, GenerationTask, hook, ProviderDoc } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { implementAction } from '../../lib/actions.ts'
+import { spawn } from '../../lib/spawn.ts'
 import { ClaudeCodeEnv } from './api.ts'
 import type { ClaudeCodeEnvService } from './api.ts'
 import { StatusAction } from './refs.ts'
@@ -48,6 +50,9 @@ const fields = {
 type Shared = { [K in keyof typeof fields]: ReturnType<(typeof fields)[K]> }
 
 export default function claudeCode(host: ExtensionHost) {
+  // Pi upstream: @earendil-works/pi-claude-code@0.1.0 src/claude-cli.ts useSpawn (patched). Claude Code starts from the
+  // process helper, so a launch does not block this process.
+  useSpawn(spawn)
   const shared = host.resource('claude-code.provider', () => {
     const state = {} as Shared
     host.onClose(async () => {
@@ -106,7 +111,27 @@ export default function claudeCode(host: ExtensionHost) {
     if (shared.closing) throw new Error('Claude Code provider is closing')
     return track(upstream.streamSimple(model, context, withEnv(options)))
   }
-  const provider = { ...upstream, stream, streamSimple }
+  // The login check sees the project's environment, as its requests do: a project the env hook moves to another Claude
+  // config folder is available when that folder is logged in, whatever the default folder says.
+  const apiKey = upstream.auth.apiKey!
+  const check: typeof apiKey.check = (input) => {
+    let extra: Record<string, string> | undefined
+    try {
+      extra = host.want(ClaudeCodeEnv)?.env(undefined)
+    } catch (error) {
+      host.notice(`Claude Code environment lookup failed, checking the default: ${String(error)}`)
+    }
+    const ctx = extra
+      ? { ...input.ctx, env: async (name: string) => extra[name] ?? input.ctx.env(name) }
+      : input.ctx
+    return apiKey.check!({ ...input, ctx })
+  }
+  const provider = {
+    ...upstream,
+    stream,
+    streamSimple,
+    auth: { ...upstream.auth, apiKey: { ...apiKey, check } },
+  }
   // Keep subscription accounting, but do not offer an in-app login for external auth.
   if (provider.auth.oauth) Reflect.deleteProperty(provider.auth.oauth, 'login')
   const facet = Symbol('claude-code')

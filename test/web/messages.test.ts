@@ -5,7 +5,6 @@ import { callerOf } from '../../extensions/messages/caller.ts'
 import {
   answerTo,
   answeredMessages,
-  callFailed,
   backgroundRow,
   conversationState,
   counterparts,
@@ -182,8 +181,6 @@ const row = (kind: string, data?: object, model?: object, calls: object[] = []) 
   } as unknown as EntryRecord,
   calls: calls as { id: string; name: string; arguments: unknown }[],
 })
-const result = (toolCallId: string, isError: boolean) =>
-  ({ model: [{ role: 'toolResult', toolCallId, isError }] }) as unknown as EntryRecord
 const said = (stopReason: string) => ({ role: 'assistant', stopReason, content: [] })
 
 describe("background in @ultimate's compact transcript", () => {
@@ -267,6 +264,23 @@ describe("background in @ultimate's compact transcript", () => {
     expect(threadRow(row('prompt.build'), messagesLog)).toBe(false)
   })
 
+  it('folds a final answer routed down to branches, naming them', () => {
+    // @ultimate's weigh-in to #477200's decisions rendered as a message to the user, above the branch's question card.
+    const routed = {
+      messages: [
+        { ...base, id: 1, from: 8, to: 7, reply: false, report: true as const },
+        { ...base, id: 2, from: 7, to: 8, reply: false, routed: 30 },
+        { ...base, id: 3, from: 7, to: 9, reply: false, routed: 30 },
+        { ...base, id: 4, from: 7, to: 6, reply: false, routed: 29 },
+      ],
+      next: 5,
+    }
+    const answer = row('pi.assistant', undefined, said('stop'))
+    expect(backgroundRow(answer, routed)).toBe(true)
+    expect(threadRow(answer, routed)).toBe(false)
+    expect(counterparts(answer, routed)).toEqual([8, 9])
+  })
+
   it('names who each row was with', () => {
     const toAgent = { id: 'tell', name: 'message', arguments: { to: '#5' } }
     expect(counterparts(row('board.reply', { from: 4 }), messagesLog)).toEqual([4])
@@ -276,14 +290,6 @@ describe("background in @ultimate's compact transcript", () => {
       counterparts(row('pi.assistant', undefined, said('toolUse'), [toAgent]), messagesLog),
     ).toEqual([5])
     expect(counterparts(row('pi.assistant', undefined, said('stop')), messagesLog)).toEqual([4])
-  })
-
-  it('tells a failed call from one that ran by its stored result', () => {
-    const entries = [result('branch-1', true), result('branch-2', false)]
-    expect(callFailed(entries, 'branch-1')).toBe(true)
-    expect(callFailed(entries, 'branch-2')).toBe(false)
-    // Still running: no result yet.
-    expect(callFailed(entries, 'branch-3')).toBe(false)
   })
 
   it('pairs a question with your answer', () => {
@@ -376,7 +382,7 @@ describe('conversation state', () => {
     expect(conversationState({ ...primary, runState: 'queued' }, messagesLog())).toBe('working')
   })
 
-  it('waits only for the primary agent with an open question to the user', () => {
+  it('waits for the primary agent with an open question to the user', () => {
     expect(conversationState({ ...primary, runState: 'answered' }, toUser)).toBe('waits')
     expect(conversationState({ ...primary, runState: 'answered' }, messagesLog())).toBe('idle')
     expect(
@@ -384,9 +390,14 @@ describe('conversation state', () => {
     ).toBe('idle')
   })
 
-  it('never waits for a subagent or another conversation, even with open messages to the user', () => {
-    for (const kind of ['subagent', 'other'] as const)
-      expect(conversationState({ id: 2, kind, runState: 'answered' }, toUser)).not.toBe('waits')
+  it('waits for a non-subagent question of its own, never for a subagent or an unrelated conversation', () => {
+    expect(conversationState({ id: 2, kind: 'other', runState: 'answered' }, toUser)).toBe('waits')
+    expect(conversationState({ id: 2, kind: 'subagent', runState: 'answered' }, toUser)).not.toBe(
+      'waits',
+    )
+    expect(conversationState({ id: 3, kind: 'other', runState: 'answered' }, toUser)).not.toBe(
+      'waits',
+    )
   })
 
   it('awaits the primary agent while its reply-expected message to it is open', () => {
@@ -409,6 +420,10 @@ describe('conversation state', () => {
     const branch = { id: 5, kind: 'other' as const, runState: 'answered' as const, primary: 3 }
     const report = { from: 5, to: 3, reply: false, report: true as const }
     expect(conversationState(branch, messagesLog(report))).toBe('awaiting')
+    // A branch's reply awaits its answer; a standing agent's reply just answered (life's @google).
+    const reply = { from: 5, to: 3, reply: false, re: 1 }
+    expect(conversationState(branch, messagesLog({ ...reply, awaits: true }))).toBe('awaiting')
+    expect(conversationState(branch, messagesLog(reply))).toBe('idle')
     // A note (no report) waits on nothing.
     expect(conversationState(branch, messagesLog({ from: 5, to: 3, reply: false }))).toBe('idle')
     expect(conversationState(branch, messagesLog(report, { from: 3, to: 5, reply: false }))).toBe(

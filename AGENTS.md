@@ -13,7 +13,7 @@ A project is a forest of conversation trees, like commit histories.
   intents, latest conversation abstracts and landings with divergence and `#conversation/entry` breadcrumbs. The UI
   calls a tally **context** and shows it as the read-only **History** page (the sidebar's project path opens it), with **Open in Zed** and **Back to
   @ultimate**; the sidebar's Memory row shows the memory's estimated tokens (what a branch starts from) and opens the
-  Memory surface, and each root heads its tree with its last three events (landings, notes, branches, compactions).
+  Memory surface.
   Start a project with @ultimate: Continue on Get ready, or **Set up with @ultimate** on the Start here card that
   @ultimate's conversation shows until onboarding has run. It walks the user through Ultimate, handles setup
   cards, reads the project and writes its first memories with `remember`; the user's answer about the project
@@ -23,9 +23,12 @@ A project is a forest of conversation trees, like commit histories.
   Roots and standing agents are never concluded or cleared, only compacted.
 - **A branch** is a feature, a fix, an experiment. @ultimate picks a root by reading its tally, then starts a
   coordinator branch that starts from its memory brief (or, without memories, its tally) before its prompt. A branch is never a subagent.
-- **Talk to @ultimate in its conversation.** The user's standing agent starts and steers branches and relays their answers there.
+- **Talk to @ultimate in its conversation.** The user's standing agent starts and steers branches there.
   The first sidebar row (on phones, the top-bar **@ultimate** button) opens it; its messages and questions to you appear in that transcript.
   Conversations and roots are not created by hand.
+- **Branches ask you in their own conversation.** A coordinator sends its decisions to @ultimate, which weighs in
+  (its picks, or deciding itself on a hands-off goal); the branch then asks you with a card there. @ultimate's
+  conversation shows a pointer to it, and your answer reaches @ultimate as a note.
 - **Coordinators carry the work.** A branch is the conversation; the coordinator is the agent that runs it, so the UI
   labels it `branch · coordinator`. A branch plans, decides and verifies; subagents are for bounded execution and
   reconnaissance, and the lander is the final gate on main.
@@ -81,11 +84,9 @@ New UI is a new extension folder, not a change to `web/`: follow the `write-exte
 
 The top-level agent may commit verified work, land it and normally push the destination branch to `origin`
 (`HazAT/ultimate`), public or private, without asking. `workspace submit` runs checks and pushes. Subagents commit
-and report, never push. Preserve remote advancement with a
-non-destructive merge in an isolate, inspect it and rerun checks; stop for ambiguous conflicts, failed checks,
-security concerns or any force push/history rewrite. Never push secrets or unrelated unverified work.
-This permission does not cover other repositories, releases, publishing, deployments or GitHub issue/PR changes.
-See [integration details](docs/worktrees.md#standing-permission-to-push-this-repository) before pushing.
+and report, never push. Never force-push, rewrite history or push secrets. This permission does not cover other
+repositories, releases, publishing, deployments or GitHub issue/PR changes. A rejected push or remote advancement:
+see [integration details](docs/worktrees.md#standing-permission-to-push-this-repository).
 
 ## Conventions
 

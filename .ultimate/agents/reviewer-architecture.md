@@ -1,6 +1,6 @@
 ---
 name: reviewer-architecture
-description: Advisory architecture review (Sonnet 5.5); asks whether a range uses Ultimate's own architecture instead of building beside it. Never blocks.
+description: Advisory architecture review; asks whether a range uses Ultimate's own architecture instead of building beside it. Never blocks.
 family: fast
 thinking: low
 fast: true

@@ -1,25 +1,6 @@
-import { execFile } from 'node:child_process'
 import { readFile, writeFile, unlink, rename } from 'node:fs/promises'
-import { basename } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { promisify } from 'node:util'
-
-const run = promisify(execFile)
-
-/** Whether process `pid` runs Ultimate's core, `server/main.ts`; throws when it cannot tell. */
-async function isCore(pid: number) {
-  if (process.platform === 'darwin') {
-    // macOS has no /proc: `ps` names the executable and joins the arguments with spaces.
-    const ps = async (field: string) =>
-      (await run('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)])).stdout.trim()
-    return (
-      basename(await ps('comm')) === basename(process.execPath) &&
-      /(?:^|\/)server\/main\.ts(?: |$)/.test(await ps('command'))
-    )
-  }
-  const command = await readFile(`/proc/${pid}/cmdline`, 'utf8')
-  return command.split('\0').some((arg) => /(?:^|\/)server\/main\.ts$/.test(arg))
-}
+import { identify } from '../lib/process-group.ts'
 
 export const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 export function alive(pid: number) {
@@ -31,44 +12,52 @@ export function alive(pid: number) {
   }
 }
 export async function retireStorageOwner(path: string) {
-  try {
-    const probe = await acquireLock(path, { pid: process.pid })
-    await probe.close()
-    return
-  } catch (error) {
-    if (!(error instanceof Error) || !error.message.startsWith('Ultimate core already owns'))
+  const held = async () => {
+    try {
+      const probe = await acquireLock(path, { pid: process.pid })
+      await probe.close()
+      return false
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Ultimate core already owns'))
+        return true
       throw error
+    }
   }
+  if (!(await held())) return
   const owner = await readOwner(path)
   if (!owner || !alive(owner.pid)) return
-  let core: boolean
-  try {
-    core = await isCore(owner.pid)
-  } catch (error) {
-    // It exited while being checked: nothing to retire.
-    if (!alive(owner.pid)) return
-    throw new Error(`Cannot verify storage owner pid ${owner.pid}; refusing to signal it`, {
-      cause: error,
-    })
-  }
-  if (!core)
-    throw new Error(`Storage owner pid ${owner.pid} is not an Ultimate core; refusing to signal it`)
-  const signal = (name: NodeJS.Signals) => {
+  const refusal = () =>
+    new Error(
+      `Cannot verify storage owner pid ${owner.pid}; shut down its Ultimate instance cleanly before restarting; refusing to signal it`,
+    )
+  if (typeof owner.coreStart !== 'string' || !owner.coreStart) throw refusal()
+  const signal = async (name: NodeJS.Signals) => {
+    if (!(await held())) return false
+    const current = await readOwner(path)
+    if (
+      current?.pid !== owner.pid ||
+      current.coreStart !== owner.coreStart ||
+      identify(owner.pid) !== owner.coreStart
+    ) {
+      if (!alive(owner.pid)) return false
+      throw refusal()
+    }
     try {
       process.kill(owner.pid, name)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
         throw new Error(`Cannot signal Ultimate core pid ${owner.pid}`, { cause: error })
     }
+    return true
   }
-  signal('SIGTERM')
+  if (!(await signal('SIGTERM'))) return
   const deadline = Date.now() + 10000
   while (alive(owner.pid) && Date.now() < deadline) await pause(50)
-  if (alive(owner.pid)) signal('SIGKILL')
+  if (alive(owner.pid)) await signal('SIGKILL')
 }
 export async function readOwner(
   path: string,
-): Promise<{ pid: number; port?: number; project?: string } | undefined> {
+): Promise<{ pid: number; port?: number; project?: string; coreStart?: string } | undefined> {
   try {
     const owner = JSON.parse(await readFile(path, 'utf8'))
     if (!Number.isSafeInteger(owner.pid) || owner.pid < 1) throw new Error('Invalid pid')
@@ -80,7 +69,7 @@ export async function readOwner(
 }
 export async function acquireLock(
   path: string,
-  value: { pid: number; port?: number; project?: string },
+  value: { pid: number; port?: number; project?: string; coreStart?: string },
   waitMs = 0,
 ) {
   const deadline = Date.now() + waitMs

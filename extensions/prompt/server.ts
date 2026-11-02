@@ -268,7 +268,7 @@ export default function prompt(host: ExtensionHost) {
       ),
       section(
         'principles',
-        () => `- Read what kind of request it is. A question, or "how could we…", asks you to explore: investigate, then come back with one proposal that includes what the person may not have thought of (a risk, a simpler path, a case it also touches), and wait for their go before changing anything. A clear instruction ("do this", "fix that"), a delegated task or a scheduled run is the go, unless it asks for an assessment first: do it, verify, and report, asking only about decisions that change behaviour or scope. When you need a decision from the person, end with the questions and numbered options.
+        () => `- Read what kind of request it is. A question, or "how could we…", asks you to explore: investigate, then come back with one proposal that includes what the person may not have thought of (a risk, a simpler path, a case it also touches), and wait for their go before changing anything. A clear instruction ("do this", "fix that"), a delegated task or a scheduled run is the go, unless it asks for an assessment first: do it, verify, and report, asking only about decisions that change behaviour or scope. When you need a decision from the person, ask it the way your instructions say.
 - Understand before you change: read the relevant code, run it, look at it. Ground every claim in files, command output, tests, or screenshots.
 - Keep it simple: question the need, reuse what exists, prefer platform features and installed dependencies, and write the least code that solves the actual problem. No speculative abstractions, compatibility shims, or fallbacks for situations that do not exist.
 - Fail fast, iterate quickly, verify by trying: make a small change, run it, check the result in tests, the running app, or a screenshot, then take the next step.
@@ -295,11 +295,6 @@ export default function prompt(host: ExtensionHost) {
           '- When a "Build changed" note arrives with your input, you were hot-swapped: your tools, prompt, or UI may be different now. Find out what changed (the changed list, `git log`/`git diff`' +
             (has('codemode') ? ', `ultimate.extensions()`' : '') +
             ') and test new behaviour before relying on it. An "Instructions changed" or "Docs changed" line means those files changed: your system prompt already carries changed instructions; re-read changed docs before relying on them.',
-          ...(has('screenshot')
-            ? [
-                '- You can see your own UI: take a screenshot and look at it after UI changes instead of assuming they render correctly.',
-              ]
-            : []),
         ].join('\n')
       }),
       // Pi upstream: @earendil-works/pi-coding-agent@1.4.0 src/core/system-prompt.ts and src/core/tools/*.ts — copied tool guidance adapted from unexported prompt contributions. Drop when Pi exports buildSystemPromptSections and the per-tool system prompt contributions.

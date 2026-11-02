@@ -8,6 +8,8 @@ import { parseFrontmatter, resolveCliModel } from '@earendil-works/pi-coding-age
 import type { ModelRuntime, SettingsManager } from '@earendil-works/pi-coding-agent'
 import type { Source } from '../server/project.ts'
 import { writeTextAtomically } from './json-file.ts'
+import { isIconName, isMarkTint, markTints } from './marks.ts'
+import type { MarkTint } from './marks.ts'
 import { DEFAULT_FAMILY, definitionRuns, isFamilyName, refOf } from './families.ts'
 import { readFamilies } from './families-settings.ts'
 // oxlint-disable-next-line no-restricted-imports -- agent discovery follows the core project trust decision
@@ -41,6 +43,10 @@ export interface AgentDefinition {
   extends?: string
   /** Standing agents (resident definitions) this one replaces: their conversations become this agent's. */
   formerly?: string[]
+  /** A standing agent's mark: a lucide icon name; an unknown one shows the default glyph. */
+  icon?: string
+  /** A standing agent's mark colour. */
+  tint?: MarkTint
   /** Overlay files whose settings, `addTools` and body discovery merged into this definition, in order. */
   overlays?: string[]
 }
@@ -64,7 +70,10 @@ export const hasLogin = (available: readonly Listed[], ref: ModelRef | undefined
 
 /**
  * The model a conversation runs on when nothing pins one: a preview's, else the default family's (`family`), else
- * Pi's default, else the first model with a login here; each only when it has a login. Undefined while none has one.
+ * Pi's default, the first of them with a login here. When none has one, the first configured one all the same: its
+ * login is gone, and the fallback card asks the user, rather than a model nobody chose (rog, 2026-10-29: a logged-out
+ * Claude Code default started a branch on a paid Anthropic key). Only with nothing configured, the first model with a
+ * login. Undefined while none has one.
  */
 export function defaultModel(
   available: readonly Listed[],
@@ -74,9 +83,21 @@ export function defaultModel(
   const first = available[0]
   return (
     configuredModel(available, settings, family) ??
+    configured(settings, family)[0] ??
     (first && { provider: first.provider, modelId: first.id })
   )
 }
+
+/** A preview's model, the default family's and Pi's default, those that name one, in that order. */
+const configured = (
+  settings: Pick<SettingsManager, 'getDefaultProvider' | 'getDefaultModel'>,
+  family?: ModelRef,
+) =>
+  [
+    previewModel(),
+    family,
+    { provider: settings.getDefaultProvider(), modelId: settings.getDefaultModel() },
+  ].filter((ref): ref is ModelRef => !!ref?.provider && !!ref.modelId)
 
 /**
  * A preview's model, else the default family's (`family`), else Pi's default, each only when it has a login here:
@@ -87,13 +108,7 @@ export function configuredModel(
   settings: Pick<SettingsManager, 'getDefaultProvider' | 'getDefaultModel'>,
   family?: ModelRef,
 ): ModelRef | undefined {
-  const configured = {
-    provider: settings.getDefaultProvider(),
-    modelId: settings.getDefaultModel(),
-  }
-  for (const ref of [previewModel(), family, configured])
-    if (ref?.provider && ref.modelId && hasLogin(available, ref as ModelRef)) return ref as ModelRef
-  return undefined
+  return configured(settings, family).find((ref) => hasLogin(available, ref))
 }
 
 type DefaultHost = {
@@ -195,6 +210,8 @@ const fields = new Set([
   'resident',
   'fast',
   'summaries',
+  'icon',
+  'tint',
 ])
 const definitionFields = new Set([...fields, 'extends', 'formerly'])
 
@@ -210,12 +227,25 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     | 'fast'
     | 'summaries'
     | 'denyTools'
+    | 'icon'
+    | 'tint'
   >
 > & {
   model?: string
 } {
-  const { description, model, thinking, family, isolate, resident, fast, summaries, denyTools } =
-    frontmatter
+  const {
+    description,
+    model,
+    thinking,
+    family,
+    isolate,
+    resident,
+    fast,
+    summaries,
+    denyTools,
+    icon,
+    tint,
+  } = frontmatter
   if (family !== undefined && (typeof family !== 'string' || !isFamilyName(family)))
     throw new Error('family must be a family name: lowercase letters, digits and -')
   if (denyTools !== undefined && !isTools(denyTools))
@@ -233,6 +263,10 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
   if (fast !== undefined && typeof fast !== 'boolean') throw new Error('fast must be a boolean')
   if (summaries !== undefined && typeof summaries !== 'boolean')
     throw new Error('summaries must be a boolean')
+  if (icon !== undefined && !isIconName(icon))
+    throw new Error('icon must be a lucide icon name, like Gem or notebook-pen')
+  if (tint !== undefined && !isMarkTint(tint))
+    throw new Error(`tint must be one of ${markTints.join(', ')}`)
   return {
     ...(description !== undefined ? { description: description.trim() } : {}),
     ...(model !== undefined ? { model } : {}),
@@ -243,6 +277,8 @@ function parseSettings(frontmatter: Record<string, unknown>): Partial<
     ...(fast !== undefined ? { fast } : {}),
     ...(summaries !== undefined ? { summaries } : {}),
     ...(denyTools !== undefined ? { denyTools } : {}),
+    ...(icon !== undefined ? { icon } : {}),
+    ...(tint !== undefined ? { tint } : {}),
   }
 }
 
@@ -478,6 +514,8 @@ export interface DefinitionFields {
   fast?: boolean
   summaries?: boolean
   formerly?: string[]
+  icon?: string
+  tint?: MarkTint
 }
 
 /** A flow list of tool names; in a flow list, commas and brackets end an item too. */
@@ -513,6 +551,8 @@ export function serializeDefinition(
     ...(frontmatter.fast ? ['fast: true'] : []),
     ...(frontmatter.summaries === false ? ['summaries: false'] : []),
     ...(frontmatter.formerly?.length ? [`formerly: ${toolList(frontmatter.formerly)}`] : []),
+    ...(frontmatter.icon ? [`icon: ${scalar(frontmatter.icon)}`] : []),
+    ...(frontmatter.tint ? [`tint: ${frontmatter.tint}`] : []),
   ]
   return `---\n${lines.join('\n')}\n---\n\n${instructions.trim()}\n`
 }
@@ -604,6 +644,8 @@ export async function saveOverlay(
   if ((form.fast ?? false) !== (base.fast ?? false)) settings.push(`fast: ${form.fast ?? false}`)
   if ((form.summaries ?? true) !== (base.summaries ?? true))
     settings.push(`summaries: ${form.summaries ?? true}`)
+  if (form.icon && form.icon !== base.icon) settings.push(`icon: ${scalar(form.icon)}`)
+  if (form.tint && form.tint !== base.tint) settings.push(`tint: ${form.tint}`)
 
   if (!base.tools && form.tools) throw cannot('limit the tools of a definition that inherits all')
   if (base.tools && !form.tools) throw cannot('make it inherit every tool')

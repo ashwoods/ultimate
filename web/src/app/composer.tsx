@@ -14,14 +14,12 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { api } from '../sdk/client.ts'
 import { ConversationIdContext } from '../sdk/conversation-scope.tsx'
-import { ThreadContext } from '../sdk/thread.ts'
 import { errorMessage } from '../sdk/format.ts'
 import { events } from '../sdk/events.ts'
 import {
   TranscriptContext,
   useConversation,
   useExtensions,
-  useIntro,
   useModels,
   useStore,
 } from '../sdk/hooks.ts'
@@ -187,8 +185,8 @@ type Draft = {
 }
 
 // In-flight submissions and retryable failures belong to the conversation, not its mounted editor.
-const drafts = new Map<number | string | undefined, ReturnType<typeof createDraft>>()
-function createDraft(id: number | string | undefined) {
+const drafts = new Map<number | undefined, ReturnType<typeof createDraft>>()
+function createDraft(id: number | undefined) {
   const key = id === undefined ? undefined : `ultimate.draft.${id}`
   let value: Draft = {
     text: key ? (localStorage.getItem(key) ?? '') : '',
@@ -215,7 +213,7 @@ function createDraft(id: number | string | undefined) {
   }
 }
 
-function getDraft(id: number | string | undefined) {
+function getDraft(id: number | undefined) {
   if (!drafts.has(id)) drafts.set(id, createDraft(id))
   return drafts.get(id)!
 }
@@ -259,15 +257,12 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
   const queued = inbox.filter((item) => item.mode !== 'write')
   const scoped = useContext(ConversationIdContext)
   const target = useContext(ComposerTargetContext)
-  const intro = useIntro()
-  // A thread's composer keeps its own draft beside the main stream's.
-  const thread = useContext(ThreadContext)
-  const draft = getDraft(thread === undefined ? id : `${id}.thread.${thread}`)
+  const draft = getDraft(id)
   const { text, images, error, sending } = useSyncExternalStore(draft.subscribe, draft.get)
   const setError = (message: string | undefined) => draft.set({ error: message })
   const setImages = (change: (images: Draft['images']) => Draft['images']) =>
     draft.set({ images: change(draft.get().images), revision: draft.get().revision + 1 })
-  const { paste, reading, pending } = useImagePaste({
+  const { paste, drop, reading, pending } = useImagePaste({
     images,
     setImages,
     setError,
@@ -350,8 +345,9 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
       return
     }
     if (event.key !== 'Enter' || event.shiftKey) return
-    // A touch keyboard's return key writes a new line; the send button sends.
-    if (touchKeyboard()) return
+    // A touch keyboard's return key writes a new line; the send button, or a
+    // hardware keyboard's Cmd/Ctrl+Enter (iPad with Magic Keyboard), sends.
+    if (touchKeyboard() && !event.metaKey && !event.ctrlKey) return
     event.preventDefault()
     // oxlint-disable-next-line typescript/no-floating-promises -- send catches submission failures and displays them in the draft's error state.
     void send(event.altKey ? 'followUp' : 'steer')
@@ -361,6 +357,7 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
     // Only the shown conversation's composer takes typing shortcuts (Escape, Shift+Tab): they act on that conversation.
     <div
       data-composer-target={scoped === undefined ? 'conversation' : 'scope'}
+      data-ui="composer"
       className={cn(column(dock), 'pb-2')}
     >
       <Inbox items={inbox} />
@@ -380,21 +377,14 @@ function ConversationComposer({ dock }: { dock?: boolean }) {
           autoFocus={!touchKeyboard()}
           readOnly={loading || sending}
           onPaste={(event) => void paste(event)}
-          id={
-            thread !== undefined
-              ? `composer-input-thread-${thread}`
-              : scoped === undefined
-                ? 'composer-input'
-                : `composer-input-${scoped}`
-          }
+          onDrop={(event) => void drop(event)}
+          id={scoped === undefined ? 'composer-input' : `composer-input-${scoped}`}
           data-conversation={id}
           onChange={(event) => update(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={
             target?.placeholder ??
-            (busy
-              ? 'Steer the run, or queue a follow-up…'
-              : (intro?.placeholder ?? 'Ask Ultimate to change something…'))
+            (busy ? 'Steer the run, or queue a follow-up…' : 'Ask Ultimate to change something…')
           }
           value={text}
         />

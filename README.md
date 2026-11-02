@@ -17,6 +17,8 @@ Built on [Pi Durable](https://earendil.com/posts/pi-durable/): the conversation,
 committed to SQLite before anything is shown, so Ultimate can rewrite its own UI, extensions, and core without losing its
 place.
 
+What Ultimate is and why it exists, in plain words: [danielgriesser.com/ultimate](https://danielgriesser.com/ultimate/).
+
 ## How to use it
 
 - **Specialize it for your project.** Working on a web shop? Ask Ultimate for what makes work on that shop easier: a
@@ -28,9 +30,8 @@ place.
 - **One familiar core everywhere.** The conversation, Pi's tools, the model and login, and the way it works are the same
   in every project; only the project's own pieces differ. Your personal additions live in `~/.ultimate/` and follow you
   to every project.
-- **Everything on, switch off what you don't need.** A fresh Ultimate is Pi's coding agent with every built-in:
-  subagents, plans, documents, automations, remote access and the rest ship in the clone and are on by default; turn any
-  of them off per machine or per project (see "Building blocks" below).
+- **Built-ins you switch on and off.** A fresh Ultimate is Pi's coding agent with its built-ins: subagents, plans,
+  documents, automations, remote access and the rest ship in the clone (see "Building blocks" below).
 - **A forest of conversation trees.** Each root keeps a read-only context: branch intents, latest conversation abstracts,
   and landings with divergence and links back to their source. Talk to @ultimate in its conversation: it starts coordinator
   branches that inherit a root's context before their prompt. Resuming a branch catches it up on what its tree learned.
@@ -52,7 +53,7 @@ Read these first; they are the source of truth, so follow them and don't invent 
 and extensions/claude-code/README.md.
 
 Then:
-1. Check the prerequisites from README "Start": Node 26, pnpm, and a Chromium for the screenshot tools. Tell me
+1. Check the prerequisites from README "Start": Node 26, pnpm, Git 2.54 or newer, and a Chromium for the screenshot tools. Tell me
    what is missing and how to install it on my system; ask before installing anything system-wide.
 2. Clone the repository unless I'm already in it, run `pnpm install`, then `pnpm link --global` so I get the
    `ultimate` command; if pnpm's global bin is not on my PATH yet, `pnpm setup` adds it.
@@ -72,7 +73,9 @@ Stop and ask me whenever a step needs my password, a login or a decision.
 By default you get Pi's coding agent in a web UI: read, write, edit, bash, codemode, and browser debugging tools,
 with the conversation, model and thinking controls, login, and footer, plus every other built-in building block.
 
-Needs Node 26 and pnpm; you log in to a model provider on first start, not before. Ultimate shares `~/.pi/agent` with
+Needs Node 26, pnpm and Git 2.54 or newer.
+
+You log in to a model provider on first start, not before. Ultimate shares `~/.pi/agent` with
 `pi` (credentials, models, settings); personal skills and instructions go in `~/.ultimate/skills/` and
 `~/.ultimate/AGENTS.md`. The
 screenshot and browser tools need a Chromium: `/usr/bin/chromium`, Google Chrome, Playwright's cached Chromium, or
@@ -98,12 +101,21 @@ cd ~/Projects/app && ultimate  # or Ultimate on one of your projects
 - On another machine: `ssh -L 4747:127.0.0.1:4747 <host>`, then open `http://127.0.0.1:4747`. Ultimate only listens on
   loopback.
 
+### Keep up to date
+
+The [Ultimate changelog](https://danielgriesser.com/ultimate/changelog/)
+([RSS](https://danielgriesser.com/ultimate/changelog/rss.xml)) says what landed, week by week, with links to the
+code. A clone that tracks this repository unchanged already gets everything through the update item in the status
+line. For a fork or a customised copy, paste the page's [follow prompt](https://danielgriesser.com/ultimate/changelog/#follow)
+into @ultimate: once a day it checks for new entries, costing nothing on quiet days, and tells you what is worth
+bringing into your copy, changing nothing without your yes. See what's new, pull in what you want; nothing requires it.
+
 ### Recommended models
 
 We recommend running @ultimate on Claude Code Opus 5.5 (`claude-code/claude-opus-5-5`), and ideally the
-coordinators too; the other agents are your choice. Coordinators inherit @ultimate's model unless a definition pins
-one, so choosing Opus 5.5 for @ultimate covers both (this repository's `.ultimate/agents/coordinator.md` overlay pins
-it with high thinking). To set it up, install the CLI (`npm install -g @anthropic-ai/claude-code`), run
+coordinators too; the other agents are your choice. Coordinators inherit @ultimate's model unless their definition
+names a family or a model, so choosing Opus 5.5 for @ultimate covers both (this repository puts its coordinator on the
+`lead` family, set to Opus 5.5 with high thinking in `.ultimate/settings.json`). To set it up, install the CLI (`npm install -g @anthropic-ai/claude-code`), run
 `claude auth login`, then pick the model in the model picker; ⌘K → **Claude Code setup…** shows the login status. The
 [Claude Code provider](extensions/claude-code/README.md) is experimental: it depends on Claude Code's protocol and
 account limits, and subscription coverage is not guaranteed. This is a recommendation only; no default changes.
@@ -162,16 +174,10 @@ The building blocks that make it possible:
 
 ## Building blocks
 
-Built-ins live in the clone's `extensions/`, and every one is on by default; `tailscale` exposes Ultimate only to your
-own Tailscale login. Each folder's README describes the building block.
-
-Turn them off in `~/.ultimate/settings.json` for this machine or `<project>/.ultimate/settings.json` for this project:
-
-```json
-{ "extensions": { "disable": ["tailscale", "claude-code"] } }
-```
-
-See [discovery and settings](docs/settings.md) for precedence, enabling extensions, project trust and live updates.
+Built-ins live in the clone's `extensions/`; each folder's README describes the building block. Most are on by
+default, a few (such as `cloud`, `parallel` and `tailscale`) start off, and the core tier is always on. Switch them in
+`~/.ultimate/settings.json` for this machine or `<project>/.ultimate/settings.json` for this project; see
+[discovery and settings](docs/settings.md) for the list, precedence, project trust and live updates.
 
 ## Surfaces
 

@@ -1,6 +1,6 @@
 ---
 name: reviewer-simplicity
-description: Simplicity, slop and test-quality review of an immutable commit range (Sonnet 5.5).
+description: Simplicity, slop and test-quality review of an immutable commit range.
 family: fast
 thinking: high
 fast: true

@@ -25,7 +25,7 @@ export type Group = { child: GroupProcess; ended: Promise<boolean>; closed: Prom
  */
 
 /** Who process `pid` is, the same on every read while it lives (its start time), or undefined once it is gone. */
-function identify(pid: number): string | undefined {
+export function identify(pid: number): string | undefined {
   if (process.platform === 'darwin') {
     try {
       return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim()
@@ -46,26 +46,55 @@ function identify(pid: number): string | undefined {
   return `${readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()}:${ticks}`
 }
 
-/**
- * Whether any process of group `pid` still runs. A member this process may not probe (EPERM) counts as alive: one of
- * another user. macOS also answers EPERM for a killed member that is a zombie until it is reaped; that one has ended.
- */
+/** Darwin returns EPERM for zombie-only groups too; permission denial alone proves nothing. */
+function darwinEnded(pid: number, denied: unknown) {
+  if (process.platform !== 'darwin' || (denied as NodeJS.ErrnoException).code !== 'EPERM')
+    return false
+  try {
+    const output = execFileSync('ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf8' })
+    let found = false
+    for (const line of output.trim().split('\n')) {
+      const row = /^(\d+)\s+([?IRSTUZ][+<>AELNSsVWX]*)$/.exec(line.trim())
+      if (!row) return false
+      if (Number(row[1]) !== pid) continue
+      found = true
+      if (!row[2].startsWith('Z')) return false
+    }
+    if (found) return true
+    // A group may disappear during ps; an empty snapshot alone is not proof.
+    try {
+      process.kill(-pid, 0)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true
+      throw error
+    }
+  } catch (cause) {
+    // Failed inspection must retain the original permission failure, never report the group gone.
+    Object.assign(denied as Error, { cause })
+  }
+  return false
+}
+
+/** Whether group `pid` still exists, excluding Darwin's zombie-only groups. */
 export function groupAlive(pid?: number) {
   if (!pid) return false
   try {
     process.kill(-pid, 0)
     return true
   } catch (error) {
-    const { code } = error as NodeJS.ErrnoException
-    if (code === 'ESRCH') return false
-    if (code !== 'EPERM') throw error
-    if (process.platform !== 'darwin') return true
-    return execFileSync('ps', ['-axo', 'pgid=,stat='], { encoding: 'utf8' })
-      .split('\n')
-      .some((line) => {
-        const [group, stat] = line.trim().split(/\s+/)
-        return Number(group) === pid && !stat.startsWith('Z')
-      })
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH' || darwinEnded(pid, error)) return false
+    throw error
+  }
+}
+
+/** Like `groupAlive`, but a member this process may not probe (EPERM) counts as alive. */
+function probe(pid: number) {
+  try {
+    return groupAlive(pid)
+  } catch (error) {
+    // A member of another user survived, so the group is still there.
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') return true
+    throw error
   }
 }
 
@@ -74,7 +103,7 @@ function send(pid: number, name: NodeJS.Signals) {
     process.kill(-pid, name)
   } catch (error) {
     // The group may empty between the check and the signal.
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH' && !darwinEnded(pid, error)) throw error
   }
 }
 
@@ -127,12 +156,12 @@ export function spawnGroup(
   })
   const left = new Promise<boolean>((resolve, reject) => {
     child.once('error', () => resolve(false))
-    // Checked in the same tick as the leader's reaping, so a group still there is ours.
+    // Checked in the same tick as the leader's reaping, so a group still there is ours. A member this process may not
+    // probe (EPERM) must not throw inside the listener.
     child.once('exit', () => {
       try {
         resolve(groupAlive(child.pid))
       } catch (error) {
-        // ps failed while checking a member macOS would not let this process probe.
         reject(error)
       }
     })
@@ -200,7 +229,7 @@ export async function stopGroup(
     }
     // After a KILL the leader's exit drains the rest of the group, with its own grace. `ended` is settled once and
     // for all, so a group that reported a survivor is probed again: once empty, it exited after all.
-    if (!(await within(leader.ended, grace + 3500)) && (unreaped() || groupAlive(pid)))
+    if (!(await within(leader.ended, grace + 3500)) && (unreaped() || probe(pid)))
       throw new Error(`Process group ${pid} did not exit`)
   } else {
     const recorded = pidFile && (await readPidFile(pidFile)) === pid

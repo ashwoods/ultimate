@@ -1,12 +1,13 @@
 /** `send()`: validating, admitting and logging a message, and starting its delivery. */
 import type { Context } from '@earendil-works/chord'
 import { defineDoc, ROOT_CONVERSATION_ID } from '@earendil-works/pi-durable'
-import type { ConversationId, TaskId } from '@earendil-works/pi-durable'
+import type { ConversationId, EntryId, TaskId } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
 import { Standing } from '../subagents/api.ts'
 import { Messages, MessageSent } from './api.ts'
 import type { Question } from './api.ts'
-import { checkQuestions, openQuestion } from './questions.ts'
+import type { Via } from './refs.ts'
+import { checkQuestions, gist, openQuestion } from './questions.ts'
 import { UserInputEvent } from '../../shared/events.ts'
 import type { Device } from '../../shared/events.ts'
 import { resolveImages } from './images.ts'
@@ -14,6 +15,7 @@ import type { ImagesRef } from './images.ts'
 import { append } from './log.ts'
 import { parentOf, resolve, senderName, starterOf } from './addresses.ts'
 import { delivery } from './delivery.ts'
+import { notice } from './notice.ts'
 
 // The receipt commits with the message, closing the gap before api.memo records its id.
 const Sent = defineDoc<{ ids: Record<string, number> }>({
@@ -33,6 +35,13 @@ const Requests = defineDoc<{ ids: Record<string, number> }>({
   fork: 'initial',
   initial: () => ({ ids: {} }),
 })
+/** An answer in a few characters: its picks (`1a 2b,c 3`) when the card numbered them, else its first line. */
+const answerSummary = (text: string) => {
+  const lines = text.split('\n').filter((line) => line.trim())
+  const picks = lines.flatMap((line) => /^(\d+[a-z,]*)[.:]/.exec(line)?.[1] ?? [])
+  return picks.length ? picks.join(' ') : (lines[0] ?? '')
+}
+
 export async function send(
   host: ExtensionHost,
   from: number | 'user',
@@ -62,11 +71,17 @@ export async function send(
     /** Place it as a note, which starts no run; by default one-way messages to the sender's starter are notes. */
     note?: boolean
     device?: Device
+    /** The user's answer or dismissal settled by @ultimate on their behalf, from their input `via.entry`. */
+    via?: Via
     /** A branch's final answer routed as its report: the branch shows as awaiting its starter. */
     report?: boolean
+    /** The starter's final answer, this entry of its, routed down to the branch it answers. */
+    routed?: EntryId
+    /** A branch's report that answers routed answers only. */
+    echo?: boolean
   } = {},
 ) {
-  const { taskId, callId, requestId, answerId, device } = options
+  const { taskId, callId, requestId, answerId, device, via } = options
   if (requestId !== undefined && from !== 'user') {
     const sent = await host.harness().snapshot(Requests, from as ConversationId, ctx)
     if (sent?.ids[requestId] !== undefined) return sent.ids[requestId]
@@ -79,25 +94,27 @@ export async function send(
   const primaryId = standing?.ultimate
   // The primary agent's messages to a busy conversation almost always steer it: new scope, a decision, a stop.
   const steer = input.steer ?? (from !== 'user' && from === primaryId)
+  // Checked before resolving, which may create a standing agent's conversation.
+  const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
+  const starter = parent ?? (await starterOf(host, from, ctx))
   if (input.to === 'user') {
-    if (from !== primaryId)
+    if (from !== primaryId && !(parent === undefined && starter !== undefined))
       throw new Error(
-        'Only @ultimate messages the user; send this to @ultimate (reply: false) and it relays it.',
+        'Only @ultimate and branches message the user; send this to the conversation that started you.',
       )
   }
   if (!input.text.trim()) throw new Error('Message text must not be empty')
   if (input.questions !== undefined && (input.to !== 'user' || input.reply === false))
     throw new Error('questions go only with a reply-expected message to the user')
   const questions = input.questions === undefined ? undefined : checkQuestions(input.questions)
-  // Checked before resolving, which may create a standing agent's conversation.
-  const parent = from === 'user' ? undefined : await parentOf(host, from, ctx)
-  const starter = parent ?? (await starterOf(host, from, ctx))
   if (parent !== undefined && input.to.replace(/^#/, '') !== String(parent))
     throw new Error(
       `Subagents report to the conversation that started them: message only #${parent}. Your final answer reaches it anyway.`,
     )
   const to = await resolve(host, input.to, from, ctx)
-  const fromLabel = await senderName(host, from, ctx)
+  const fromLabel = via
+    ? `user (settled for them by @ultimate, from what they said in its chat)`
+    : await senderName(host, from, ctx)
   const toLabel = await senderName(host, to, ctx)
   return host.harness().commit(async (tx) => {
     const receipt = taskId === undefined ? undefined : await tx.doc(Sent, taskId)
@@ -183,6 +200,9 @@ export async function send(
       ...(images ? { images } : {}),
       ...(questions ? { questions } : {}),
       ...(options.report ? { report: true as const } : {}),
+      ...(options.routed !== undefined ? { routed: options.routed } : {}),
+      ...(options.echo ? { echo: true as const } : {}),
+      ...(via ? { via } : {}),
     })
     await host.emit(tx, MessageSent, {
       message: message.id,
@@ -191,8 +211,58 @@ export async function send(
       reply: message.reply,
       steer,
     })
-    // The user's answer or dismissal is their input to the asker; the message's `entry` names it once delivered.
-    if (from === 'user' && answerId !== undefined && typeof to === 'number')
+    if (primaryId !== undefined) {
+      const asked = to === 'user' && message.reply && from !== primaryId && typeof from === 'number'
+      const answered =
+        from === 'user' && answerId !== undefined && typeof to === 'number' && to !== primaryId
+      const notification = asked
+        ? {
+            kind: 'board.asked' as const,
+            // What the pointer shows outlives the capped message log.
+            data: {
+              message: message.id,
+              from,
+              ...(callId === undefined ? {} : { call: callId }),
+              summary: questions?.length
+                ? `asks you ${questions.length} question${questions.length === 1 ? '' : 's'} · ${questions[0].text}`
+                : `asks you · ${input.text.split('\n')[0]}`,
+            },
+            content: `#${from} asked the user (message ${message.id}): ${gist(message)}. The user answers there; their answer reaches you as a note.`,
+          }
+        : answered
+          ? {
+              kind: 'board.answered' as const,
+              data: {
+                message: answerId,
+                from: to,
+                ...(via ? { via } : {}),
+                ...(input.dismiss
+                  ? { dismissed: true }
+                  : {
+                      summary: answerSummary(input.text),
+                    }),
+              },
+              content: via
+                ? `You settled #${to}'s questions (message ${answerId}) for the user${input.dismiss ? ', closed without an answer' : ''}.`
+                : input.dismiss
+                  ? `The user dismissed #${to}'s questions (message ${answerId}).`
+                  : `The user answered #${to}'s questions (message ${answerId}):\n${input.text}`,
+            }
+          : undefined
+      if (notification)
+        await tx.createTask(
+          notice(host),
+          { to: primaryId, ...notification },
+          {
+            conversationId: primaryId,
+            ownership: { kind: 'conversation' },
+            background: true,
+          },
+        )
+    }
+    // The user's answer or dismissal is their input to the asker; the message's `entry` names it once delivered. One
+    // @ultimate settled for them is not: their chat input that it came from counted already.
+    if (from === 'user' && answerId !== undefined && typeof to === 'number' && !via)
       await host.emit(tx, UserInputEvent, {
         conversation: to,
         kind: input.dismiss ? 'dismiss' : 'answer',

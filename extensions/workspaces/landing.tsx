@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { MentionText } from '@/components/ai/message'
 import { Button } from '@/components/ui/button'
-import { api, definePoint, Fold, Provided, useConversations, useUltimate } from '@/sdk'
+import { api, definePoint, Fold, Provided, useConversationSummary, useUltimate } from '@/sdk'
 import { FeatureTag, useStandingName } from '../conversations/ui.tsx'
 import { GithubAction } from './refs.ts'
 import type { ConversationSubject } from '../conversations/types.ts'
@@ -28,7 +28,7 @@ export function Open({
   entry?: number
 }) {
   const { switchConversation } = useUltimate()
-  const busy = useConversations().find((conversation) => conversation.id === id)?.busy
+  const busy = useConversationSummary(id)?.busy
   return (
     <Button
       className={cn(
@@ -72,13 +72,6 @@ export function useGithubRepo() {
  * (`review` provides it).
  */
 export const Review = definePoint<string, (() => void) | undefined>('workspaces.review')
-/**
- * What shows under a landing report in a conversation's transcript, outside its fold, by the conversation that landed
- * and the commit it landed (`threads` provides the feature's catch-up in @ultimate's conversation).
- */
-export const LandingAfter = definePoint<{ from: number; sha: string }, ReactNode>(
-  'workspaces.landing-after',
-)
 
 const external = (href: string, children: ReactNode, className?: string) => (
   <a

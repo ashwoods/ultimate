@@ -32,6 +32,7 @@ import {
   useAction,
   useCommands,
   useConversations,
+  useConversationSummary,
   useExtensionUiState,
   useNow,
   useStore,
@@ -191,7 +192,7 @@ const plain = (line: string) => line.replace(/^[\s#>*+-]+/, '').replace(/[*_`]+/
 /** One past run: status, fire time, the first line of its answer, and a way into its conversation. */
 function RunRow({ run, now }: { run: Run; now: number }) {
   const { conversationId, switchConversation } = useUltimate()
-  const conversation = useConversations().find((summary) => summary.id === run.conversationId)
+  const conversation = useConversationSummary(run.conversationId)
   const working = run.status === 'running'
   const shown = run.conversationId !== undefined && run.conversationId === conversationId
   const took =
@@ -756,7 +757,7 @@ export function AutomationsPanel() {
   )
 }
 
-const heading = 'font-mono text-[10.5px] tracking-wider text-muted-foreground uppercase'
+const heading = 'section-label'
 
 /** A script automation beside its watcher: what it watches and what a fire does, then its running script. */
 function ScriptDetail({

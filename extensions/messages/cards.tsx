@@ -1,6 +1,5 @@
 import type { EntryRecord } from '@earendil-works/pi-durable'
 import {
-  ArrowLeftRightIcon,
   CheckIcon,
   CornerDownRightIcon,
   CornerLeftUpIcon,
@@ -29,7 +28,7 @@ import {
   Provided,
   useCompact,
   useConversation,
-  useConversations,
+  useConversationSummary,
   useDocOf,
   useNow,
   useTranscript,
@@ -45,7 +44,6 @@ import { accentOf } from './accent.tsx'
 import {
   answerTo,
   answeredMessages,
-  callFailed,
   backgroundRow,
   counterparts,
   emptyMessages,
@@ -69,6 +67,16 @@ const Answers = ({ message }: { message: Message }) => (
     {(answers) => answers}
   </Provided>
 )
+
+/** Who settled `question` with `answer`: you, or @ultimate for you from your chat. */
+const settledLabel = (question: Message, answer: Message) =>
+  question.state === 'dismissed'
+    ? answer.via
+      ? '@ultimate dismissed it for you'
+      : 'You dismissed it'
+    : answer.via
+      ? '@ultimate answered for you'
+      : 'You answered'
 
 /** The accent of sender `id`: @ultimate's fixed one when the standing agents name it, else `accentOf`. */
 export function useAccentOf(id: number | 'user' | 'remote') {
@@ -108,7 +116,12 @@ export function Address({
     return (
       <span className="flex items-center gap-1.5" title="@ultimate">
         <AgentMark name={name} size="sm" />
-        <span className="font-sans text-[10.5px] font-semibold tracking-[0.28em]">ULTIMATE</span>
+        <span
+          className="font-sans text-[10.5px] font-semibold tracking-[0.28em]"
+          data-ui="wordmark"
+        >
+          ULTIMATE
+        </span>
       </span>
     )
   return (
@@ -204,6 +217,8 @@ export function Bubble({
     <section
       data-message-outgoing={message?.id}
       data-compact-bubble
+      data-sender={accent === accentOf('ultimate') ? 'ultimate' : undefined}
+      data-ui="message-card"
       className="group/bubble mt-2 w-full min-w-0"
     >
       <header className="flex h-6 min-w-0 items-center gap-2 font-mono text-[11px] text-muted-foreground">
@@ -288,13 +303,29 @@ function AttachedAnswer({ answer, question }: { answer: Message; question: Messa
   const now = useNow(60000)
   const accent = accentOf('user')
   const dismissed = question.state === 'dismissed'
+  const { via } = answer
+  const { showSurface, switchConversation } = useUltimate()
   return (
     <div className="border-t border-border/60 px-3 py-2.5" data-compact-answer={answer.id}>
       <div className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
         <CornerDownRightIcon className={cn('size-3.5 shrink-0', accent.name)} />
-        <span className={cn('font-semibold', accent.name)}>
-          {dismissed ? 'You dismissed it' : 'You answered'}
-        </span>
+        <span className={cn('font-semibold', accent.name)}>{settledLabel(question, answer)}</span>
+        {via?.entry !== undefined && (
+          <button
+            className="flex cursor-pointer items-center gap-1 hover:text-foreground"
+            data-settled-from={via.entry}
+            onClick={() => {
+              events.emit('messages:open', { conversation: via.conversation, entry: via.entry })
+              showSurface('agent')
+              switchConversation(via.conversation)
+            }}
+            title="Show what you said that @ultimate read this from"
+            type="button"
+          >
+            <SquareArrowOutUpRightIcon className="size-3" />
+            from your message
+          </button>
+        )}
         <time
           className="ml-auto"
           dateTime={new Date(answer.at).toISOString()}
@@ -303,77 +334,13 @@ function AttachedAnswer({ answer, question }: { answer: Message; question: Messa
           {formatAgo(answer.at, now)}
         </time>
       </div>
-      {!dismissed && (
+      {(!dismissed || via) && (
         <UserText
           className="mt-1.5 rounded-md border border-border/70 bg-secondary/60 px-3 py-2 text-[13px] leading-relaxed"
           text={answer.text}
         />
       )}
     </div>
-  )
-}
-
-/** A catch-up on the tally and main, the note a conversation gets when it resumes after they moved. */
-const catchup = (entry: EntryRecord) =>
-  entry.kind === 'lineage.note' && (entry.data as { source?: unknown })?.source === 'main'
-
-/** What one background row is, in a few words that its counterpart follows. */
-function backgroundWord(
-  { entry, calls }: CompactSummaryProps['rows'][number],
-  failed: (call: string) => boolean,
-) {
-  if (catchup(entry)) return 'Catch-up'
-  const words: Record<string, string> = {
-    'board.message': 'Message from',
-    'board.reply': 'Reply from',
-    'lineage.note': 'Note from',
-    'lineage.finished': 'Finished:',
-    'lineage.abstract': 'Summary of',
-    'lineage.woken': 'Woke up after compaction',
-    'subagents.report': 'Report from',
-    'subagents.instruction': 'Instruction from',
-    'workspaces.lander-report': 'Landing report from',
-  }
-  if (words[entry.kind]) return words[entry.kind]
-  if (calls.length) {
-    const branches = calls.every((call) => call.name === 'branch')
-    // A failed call did not do what its name says.
-    if (calls.every((call) => failed(call.id))) return branches ? 'Branch failed' : 'Message failed'
-    return branches ? (calls.length === 1 ? 'Started branch' : 'Started branches') : 'Message to'
-  }
-  return 'Answered'
-}
-
-/** A background group's line: who it was with, how many updates, and the work between them. */
-export function BackgroundSummary({ rows, steps, working, between }: CompactSummaryProps) {
-  const log = useDocOf(1, MessagesDoc) ?? emptyMessages
-  const transcript = useTranscript()
-  if (between) return <StretchSummary rows={rows} steps={steps} working={working} />
-  const shown = rows.filter((row) => backgroundRow(row, log) === true)
-  const who = [...new Set(shown.flatMap((row) => counterparts(row, log)))]
-  const count = shown.length
-  const what =
-    count === 1
-      ? backgroundWord(shown[0], (call) => callFailed(transcript, call))
-      : `${count} updates ${who.length ? 'with' : 'between agents'}`
-  const Icon = count === 1 && catchup(shown[0].entry) ? GitBranchIcon : ArrowLeftRightIcon
-  return (
-    <span className="flex min-w-0 items-center gap-1.5" data-compact-background>
-      <Icon className="size-3 shrink-0 text-brand/80" />
-      <span className="shrink-0">{what}</span>
-      {who.slice(0, 2).map((id) => (
-        <span className="flex min-w-0 text-foreground/80" key={id}>
-          {id === 'lander' ? '@lander' : <Address id={id} />}
-        </span>
-      ))}
-      {who.length > 2 && <span className="shrink-0">+{who.length - 2}</span>}
-      {steps > 0 && (
-        <span className="shrink-0 max-sm:hidden">
-          · {steps} step{steps === 1 ? '' : 's'}
-        </span>
-      )}
-      {working && <span className="shrink-0 text-brand">· working</span>}
-    </span>
   )
 }
 
@@ -390,7 +357,7 @@ export function MessageNumber({ id }: { id: number }) {
  * A whole stretch between @ultimate's messages in one line: how many updates, who with, what landed and whether the
  * app reloaded, so the reader knows whether to open it.
  */
-function StretchSummary({ rows, steps, working }: CompactSummaryProps) {
+export function StretchSummary({ rows, steps, working }: CompactSummaryProps) {
   const log = useDocOf(1, MessagesDoc) ?? emptyMessages
   const counted = rows.filter(
     (row) => backgroundRow(row, log) !== 'hidden' && row.entry.kind !== 'pi.system',
@@ -542,11 +509,11 @@ export function MessageCall({ call, core }: { call: ToolCallView; core: ReactNod
 /** The `branch` tool as the branch it started and the prompt it was given; a failed call keeps the generic card. */
 export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode }) {
   const log = useDocOf(1, MessagesDoc)
-  const conversations = useConversations()
   const { switchConversation, showSurface } = useUltimate()
-  if (call.status === 'error' || call.status === 'interrupted') return core
   const started = /^Branch #(\d+) started; message (\d+) sent\.$/.exec(call.output)
   const id = started ? Number(started[1]) : undefined
+  const title = useConversationSummary(id)?.title
+  if (call.status === 'error' || call.status === 'interrupted') return core
   const message = started ? log?.messages.find((m) => m.id === Number(started[2])) : undefined
   const { prompt, root, isolated } = call.args as {
     prompt?: string
@@ -572,10 +539,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
           <span className="shrink-0">Branch</span>
           {id !== undefined && (
             <span className="flex min-w-0 text-foreground/80">
-              <ConversationRef
-                id={id}
-                title={conversations.find((conversation) => conversation.id === id)?.title}
-              />
+              <ConversationRef id={id} title={title} />
             </span>
           )}
           <span className={cn('shrink-0', state === 'failed' && 'text-destructive')}>
@@ -593,11 +557,7 @@ export function BranchCall({ call, core }: { call: ToolCallView; core: ReactNode
           </span>
           {id !== undefined && (
             <span className="flex min-w-0 overflow-hidden text-foreground">
-              <ConversationRef
-                className="w-full"
-                id={id}
-                title={conversations.find((conversation) => conversation.id === id)?.title}
-              />
+              <ConversationRef className="w-full" id={id} title={title} />
             </span>
           )}
           <span className="shrink-0 max-sm:hidden">
@@ -678,6 +638,8 @@ export function MessageInput({ entry }: { entry: EntryRecord }) {
     >
       <section
         data-message-input={origin.id}
+        data-sender={accent === accentOf('ultimate') ? 'ultimate' : undefined}
+        data-ui="message-card"
         className={cn('group/bubble min-w-0 rounded-lg border', accent.edge, accent.fill)}
       >
         <header className="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-2 font-mono text-[11px] text-muted-foreground">
@@ -752,7 +714,13 @@ function UserTurn({ entry, id, text }: { entry: EntryRecord; id: number; text: s
         type="button"
       >
         <CornerLeftUpIcon className="size-3" />
-        {question.state === 'dismissed' ? 'you dismissed a question' : 'you answered a question'}
+        {question.state === 'dismissed'
+          ? message?.via
+            ? '@ultimate dismissed a question for you'
+            : 'you dismissed a question'
+          : message?.via
+            ? '@ultimate answered a question for you'
+            : 'you answered a question'}
       </button>
     )
   }
