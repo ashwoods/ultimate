@@ -3,6 +3,7 @@ import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context'
 import { defineDoc } from '@earendil-works/pi-durable'
 import type { ConversationId, Cursor, Tx } from '@earendil-works/pi-durable'
 import type { ExtensionHost } from '../../server/extensions.ts'
+import { onCommit } from '../../lib/commits.ts'
 import { Standing } from '../subagents/api.ts'
 import { relayId } from './agent.ts'
 import { ActivityDoc } from './refs.ts'
@@ -79,7 +80,7 @@ export function watchActivity(host: ExtensionHost) {
     await load()
     if (voice !== undefined) await refresh(voice)
   })
-  return host.harness().subscribeCommits((publication) => {
+  return onCommit(host.harness(), (publication) => {
     // Voice's conversation may be created in this very commit: then its entries are told apart after the reload.
     const reload = publication.changes.some(
       (change) => change.type === 'document' && change.record.kind === Standing.definition.kind,
